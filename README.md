@@ -30,8 +30,9 @@ You need Docker (or Podman) and a reverse proxy with HTTPS. The examples use Cad
    ```
 
 3. Point your proxy at `127.0.0.1:3000`. [`deploy/Caddyfile.example`](deploy/Caddyfile.example)
-   has what Kobo devices need: no compression on `/kobo/*`, an upload size limit, the
-   client's address in `X-Real-IP`, and secrets kept out of the access log.
+   has what Kobo devices need: no compression on `/kobo/*`, an upload size limit, and
+   secrets kept out of the access log. It also says which header carries the
+   client's address, which differs if Cloudflare is in front of Caddy.
 4. On its first start, the server prints a link for making the admin account. Find
    it, open it, and choose your username and password:
 

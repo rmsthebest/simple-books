@@ -1,3 +1,25 @@
+# Who's connecting: Caddy sends the client's address to simple-books in
+# X-Forwarded-For, which compose.yaml's CLIENT_IP_HEADER reads. Caddy replaces any
+# X-Forwarded-For a client sends, so it can't be faked, and nothing more is needed
+# here. Login limits and the admin page use this address.
+#
+# Behind Cloudflare (or another proxy in front of Caddy), X-Forwarded-For holds more
+# than one address, and simple-books reads only a header with exactly one. Instead:
+# 1. Tell Caddy to trust the proxy, in the global options at the top of this file,
+#    using the proxy's published address ranges (Cloudflare: cloudflare.com/ips):
+#
+#      {
+#          servers {
+#              trusted_proxies static 173.245.48.0/20 103.21.244.0/22 ...
+#          }
+#      }
+#
+# 2. Pass the address Caddy works out from that, in the reverse_proxy block below:
+#
+#      header_up X-Real-IP {client_ip}
+#
+# 3. Set CLIENT_IP_HEADER: "X-Real-IP" in compose.yaml.
+
 books.example.com {
     # Kobo devices need Content-Length on every response, so never compress these.
     @compress not path /kobo/*
@@ -15,7 +37,5 @@ books.example.com {
         }
     }
 
-    reverse_proxy 127.0.0.1:3000 {
-        header_up X-Real-IP {client_ip}
-    }
+    reverse_proxy 127.0.0.1:3000
 }

@@ -1,12 +1,12 @@
 # ───────────── Settings: edit these ─────────────
-x-image: &image "ghcr.io/rmsthebest/simple-books:0.1.2"
+x-image: &image "ghcr.io/rmsthebest/simple-books:latest"   # or pin a version, like :0.1.1
 x-user:  &user  "1000:1000"              # owner of the data directory on the host
 x-port:  &port  "127.0.0.1:3000:3000"    # keep 127.0.0.1 so only Caddy can reach it
 x-data:  &data  "./data:/data"           # where the database and books live on the host
 
 x-settings: &settings
   PUBLIC_URL: "https://books.example.com"
-  CLIENT_IP_HEADER: "X-Real-IP"          # set by Caddy; must match your Caddyfile
+  CLIENT_IP_HEADER: "X-Forwarded-For"    # Caddy sets this; behind Cloudflare, see the Caddyfile example
   # MAX_UPLOAD_MB: "256"                 # largest EPUB you can upload
   DEFAULT_QUOTA_MB: "5000"               # storage per user; admins can change it per user
   LOG_LEVEL: "info"
