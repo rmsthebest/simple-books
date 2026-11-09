@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n                   SELECT 1 FROM hardcover_sign_ins\n                   WHERE user_id = ?1 AND outcome IS NULL AND expires_at > ?2\n               ) AS \"waiting!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "waiting!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "395ca12186b32aa7515f468de0cbb8081b282bb7b9fbabd2b89fd3b20bac865c"
+}

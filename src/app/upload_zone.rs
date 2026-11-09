@@ -83,7 +83,12 @@ pub fn UploadZone() -> impl IntoView {
     };
 
     view! {
-        <section class="upload" data-hydrated=move || ready.get().to_string()>
+        <section
+            class="upload"
+            data-hydrated=move || ready.get().to_string()
+            // Uploading, or showing how uploads went: a reload now would lose that.
+            data-busy=move || items.with(|items| !items.is_empty()).to_string()
+        >
             <form
                 class="upload-form"
                 method="post"

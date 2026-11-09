@@ -140,8 +140,6 @@ fn HardcoverSection(overview: Overview) -> impl IntoView {
     } = overview;
     let body = if let Some((code, url)) = code {
         view! {
-            // Checks back until the code has been entered. Only while waiting.
-            <meta http-equiv="refresh" content="5" />
             <p>"On your phone or computer, go to Hardcover and enter this code:"</p>
             <p class="code" aria-label="Your code">{code}</p>
             <p><a class="button" href=url target="_blank" rel="noopener noreferrer">"Open Hardcover"</a></p>

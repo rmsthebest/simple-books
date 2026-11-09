@@ -207,6 +207,37 @@ fn Layout(user: CurrentUser, #[prop(into)] title: String, children: Children) ->
             <Flash />
             {children()}
         </main>
+        <WatchIfWaiting user />
+    }
+}
+
+/// Keeps the page up to date while something it shows is still under way. Not on a
+/// page that answers a form to show a secret: that can't be shown again.
+#[component]
+fn WatchIfWaiting(user: CurrentUser) -> impl IntoView {
+    let revealing = request_parts()
+        .extensions
+        .get::<crate::server::web::Revealed>()
+        .is_some();
+    view! {
+        <Suspense>
+            {Suspend::new(async move {
+                if revealing {
+                    return ().into_any();
+                }
+                match user.scope.waiting_on().await {
+                    Ok(current) if !current.is_empty() => {
+                        view! { <crate::app::watch::Watch current /> }.into_any()
+                    }
+                    Ok(_) => ().into_any(),
+                    Err(error) => {
+                        // Only the automatic update is lost; the page itself is fine.
+                        tracing::warn!(%error, "couldn't tell what's under way");
+                        ().into_any()
+                    }
+                }
+            })}
+        </Suspense>
     }
 }
 

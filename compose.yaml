@@ -1,5 +1,5 @@
 # ───────────── Settings: edit these ─────────────
-x-image: &image "ghcr.io/rmsthebest/simple-books:0.1.1"
+x-image: &image "ghcr.io/rmsthebest/simple-books:0.1.2"
 x-user:  &user  "1000:1000"              # owner of the data directory on the host
 x-port:  &port  "127.0.0.1:3000:3000"    # keep 127.0.0.1 so only Caddy can reach it
 x-data:  &data  "./data:/data"           # where the database and books live on the host

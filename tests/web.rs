@@ -1821,3 +1821,97 @@ mod admin {
         assert!(html(&reply).contains("203.0.113.7"));
     }
 }
+
+mod waiting {
+    use super::*;
+    use simple_books::server::db::models::{BookDetails, NewBook};
+
+    const WATCH: &str = r#"data-component="Watch_"#;
+
+    /// A book that's still being got ready for the Kobo.
+    async fn pending_book(scope: &UserScope, title: &str) -> Uuid {
+        let id = Uuid::new_v4();
+        let book = NewBook {
+            id,
+            title: title.to_owned(),
+            authors: vec![],
+            cover_id: None,
+            original_sha256: format!("hash of {title}"),
+            original_size: 10,
+            visibility: Visibility::Private,
+            kepub_size: None,
+            details: BookDetails::default(),
+        };
+        scope.create_book(&book, false).await.unwrap();
+        id
+    }
+
+    async fn status(server: &TestServer, cookie: &str) -> String {
+        let reply = page(server, "/status", cookie).await;
+        assert_eq!(reply.status, 200);
+        assert_eq!(reply.header("cache-control"), Some("private, no-store"));
+        html(&reply)
+    }
+
+    #[tokio::test]
+    async fn status_needs_a_session() {
+        let server = TestServer::start().await;
+        assert_eq!(server.get("/status").await.status, 401);
+    }
+
+    #[tokio::test]
+    async fn a_page_watches_only_while_a_book_is_being_got_ready() {
+        let server = TestServer::start().await;
+        let (ann, cookie) = sign_up(&server, "ann", false).await;
+        assert_eq!(status(&server, &cookie).await, "");
+        assert!(!html(&page(&server, "/", &cookie).await).contains(WATCH));
+
+        let book = pending_book(&ann, "Slow").await;
+        let waiting = status(&server, &cookie).await;
+        assert_eq!(waiting, format!("books={book}"));
+        for path in [
+            "/".to_owned(),
+            "/shared".to_owned(),
+            format!("/books/{book}"),
+            "/device".to_owned(),
+        ] {
+            let shown = html(&page(&server, &path, &cookie).await);
+            assert!(shown.contains(WATCH), "{path}");
+            assert!(
+                shown.contains(&waiting),
+                "{path}: it knows what it's waiting for"
+            );
+        }
+
+        ann.mark_kepub(book, Some(10)).await.unwrap();
+        assert_eq!(status(&server, &cookie).await, "");
+        let shown = html(&page(&server, &format!("/books/{book}"), &cookie).await);
+        assert!(!shown.contains(WATCH));
+        assert!(!shown.contains("Getting it ready"));
+    }
+
+    #[tokio::test]
+    async fn nobody_waits_on_someone_elses_books() {
+        let server = TestServer::start().await;
+        let (ann, _) = sign_up(&server, "ann", false).await;
+        let (_, bob) = sign_up(&server, "bob", false).await;
+        pending_book(&ann, "Ann's").await;
+        assert_eq!(status(&server, &bob).await, "");
+        assert!(!html(&page(&server, "/", &bob).await).contains(WATCH));
+    }
+
+    #[tokio::test]
+    async fn a_page_showing_a_secret_never_reloads_itself() {
+        let server = TestServer::start().await;
+        let (ann, cookie) = sign_up(&server, "ann", false).await;
+        pending_book(&ann, "Slow").await;
+        let reply = post(&server, "/device/connect", &cookie, &[]).await;
+        assert_eq!(reply.status, 200);
+        let shown = html(&reply);
+        assert!(shown.contains("/kobo/"), "the address is shown");
+        assert!(
+            !shown.contains(WATCH),
+            "so it mustn't be reloaded or sent again"
+        );
+    }
+}

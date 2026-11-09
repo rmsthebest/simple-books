@@ -501,7 +501,7 @@ async fn connecting_with_a_code() {
     assert!(page.contains("ABCD-1234"), "the code is shown");
     assert!(page.contains(r#"href="https://hardcover.app/link?code=ABCD-1234""#));
     assert!(
-        page.contains(r#"http-equiv="refresh""#),
+        page.contains(r#"data-component="Watch_"#),
         "and the page checks back"
     );
     assert!(
@@ -518,7 +518,7 @@ async fn connecting_with_a_code() {
     let page = setup.page("/device", &cookie).await;
     assert!(page.contains("Connected as"));
     assert!(page.contains("reader"));
-    assert!(!page.contains(r#"http-equiv="refresh""#));
+    assert!(!page.contains(r#"data-component="Watch_"#), "and stops");
     assert!(
         !page.contains("hc_at_") && !page.contains("hc_rt_"),
         "no token reaches a page"

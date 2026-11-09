@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.id AS \"id!\" FROM library_entries e JOIN books b ON b.id = e.book_id\n               WHERE e.user_id = ?1 AND b.kepub_state = 'pending' ORDER BY b.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "088d0c392d0c74048b0a676667406b482b2c2959e693b06011472ae019a6cd48"
+}

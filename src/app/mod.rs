@@ -5,6 +5,7 @@
 pub mod connect_kobo;
 pub mod cover_picker;
 pub mod upload_zone;
+pub mod watch;
 
 #[cfg(feature = "ssr")]
 mod pages;

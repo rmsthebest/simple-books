@@ -8,6 +8,7 @@ mod books;
 mod devices;
 pub mod gate;
 mod hardcover;
+mod status;
 
 use axum::{
     Router,
@@ -15,7 +16,7 @@ use axum::{
     extract::Request,
     middleware,
     response::{Redirect, Response},
-    routing::post,
+    routing::{get, post},
 };
 use leptos::prelude::provide_context;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -27,6 +28,7 @@ const FORM_BODY_LIMIT: usize = 256 * 1024;
 
 pub fn router(state: &AppState) -> Router<AppState> {
     Router::new()
+        .route("/status", get(status::waiting_on))
         .route("/login", post(accounts::log_in))
         .route("/logout", post(accounts::log_out))
         .route("/setup/{token}", post(accounts::set_password))

@@ -24,7 +24,7 @@ cast_possible_truncation = "allow"
 
 [package]
 name = "simple-books"
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -58,8 +58,9 @@ serde_json = { version = "1", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", optional = true, features = [
-    "Blob", "BlobPropertyBag", "console", "DataTransfer", "DomStringList", "DragEvent", "Event",
-    "EventTarget", "File", "FileList", "FormData", "HtmlFormElement", "HtmlInputElement", "Location", "ProgressEvent",
+    "Blob", "BlobPropertyBag", "console", "DataTransfer", "Document", "DomStringList", "DragEvent", "Element",
+    "Event", "EventTarget", "File", "FileList", "FormData", "HtmlFormElement", "HtmlInputElement",
+    "HtmlTextAreaElement", "Location", "Node", "NodeList", "ProgressEvent",
     "Url", "Window", "XmlHttpRequest", "XmlHttpRequestEventTarget", "XmlHttpRequestUpload",
 ] }
 

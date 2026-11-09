@@ -6,6 +6,7 @@ pub mod hardcover;
 pub mod jobs;
 pub mod models;
 pub mod scope;
+pub mod status;
 
 use std::{path::Path, time::Duration};
 
