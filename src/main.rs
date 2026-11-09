@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use leptos::config::LeptosOptions;
 use simple_books::server::{
     AppState,
-    auth::accounts,
+    auth::{accounts, first_run::FirstRun},
     config::Config,
     convert::{self, Tools, limited},
     db::Db,
@@ -18,7 +18,7 @@ use simple_books::server::{
     http::limit::Limits,
     kobo::resources::Resources,
     library::upload::UploadGate,
-    router,
+    now, router,
     storage::{files::create_private_dir, layout::Layout, reconcile},
 };
 use tokio::{
@@ -142,11 +142,14 @@ async fn serve(config: Config) -> Result<(), AnyError> {
     let (db, layout) = open_database(&config).await?;
     let listen_addr = config.listen_addr;
 
-    if !db.has_users().await? {
-        tracing::warn!(
-            "No users yet. Create the first with: simple-books admin create-user <name> --admin"
-        );
-    }
+    // With nobody to sign in, the first admin comes from a link only this log shows.
+    let first_run = Arc::new(FirstRun::default());
+    let first_link = if db.has_users().await? {
+        None
+    } else {
+        let token = first_run.issue(now());
+        Some(format!("{}/setup/{token}", config.public_url))
+    };
     tokio::spawn(clear_expired_credentials(db.clone()));
 
     let report = reconcile::run(&layout, &db).await?;
@@ -174,6 +177,7 @@ async fn serve(config: Config) -> Result<(), AnyError> {
         uploads: Arc::new(UploadGate::default()),
         limits: Arc::new(Limits::default()),
         hardcover,
+        first_run,
     };
     tokio::spawn(convert::run(state.clone(), tools));
     if let Some(hardcover) = state.hardcover.clone() {
@@ -185,6 +189,14 @@ async fn serve(config: Config) -> Result<(), AnyError> {
     }
 
     let listener = tokio::net::TcpListener::bind(listen_addr).await?;
+    if let Some(link) = first_link {
+        // Printed, not logged, so it never passes through the log formatter.
+        println!(
+            "No users yet. Open this link to choose the admin's username and password. \
+             It works once, within 72 hours, and restarting prints a new one:"
+        );
+        println!("{link}");
+    }
     tracing::info!(%listen_addr, "listening");
     let app = router::build(state).into_make_service_with_connect_info::<SocketAddr>();
     axum::serve(listener, app)

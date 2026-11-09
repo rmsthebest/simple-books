@@ -37,6 +37,8 @@ pub struct AppState {
     pub limits: Arc<http::limit::Limits>,
     /// `None` when Hardcover is turned off.
     pub hardcover: Option<Arc<hardcover::Hardcover>>,
+    /// The link that makes the first admin, while there are no users.
+    pub first_run: Arc<auth::first_run::FirstRun>,
 }
 
 impl FromRef<AppState> for LeptosOptions {

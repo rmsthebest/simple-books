@@ -12,7 +12,7 @@ use serde_json::json;
 use simple_books::server::{
     auth::{accounts, session::COOKIE_NAME},
     db::{models::Visibility, scope::UserScope},
-    testkit,
+    now, testkit,
 };
 use uuid::Uuid;
 
@@ -409,6 +409,137 @@ mod signing_in {
                 .iter()
                 .any(|u| u.username == "x")
         );
+    }
+
+    fn first_run_path(server: &TestServer) -> String {
+        format!("/setup/{}", server.state.first_run.issue(now()))
+    }
+
+    #[tokio::test]
+    async fn the_first_link_makes_the_admin_once() {
+        let server = TestServer::start().await;
+        let path = first_run_path(&server);
+
+        let shown = html(&server.get(&path).await);
+        assert!(shown.contains(r#"name="username""#), "{shown}");
+
+        // Mistakes come back to the form, and the link still works.
+        for (pairs, error) in [
+            (
+                &[
+                    ("username", "a/b"),
+                    ("password", PASSWORD),
+                    ("confirm", PASSWORD),
+                ][..],
+                "username",
+            ),
+            (
+                &[
+                    ("username", "tony"),
+                    ("password", "too short"),
+                    ("confirm", "too short"),
+                ][..],
+                "short",
+            ),
+            (
+                &[
+                    ("username", "tony"),
+                    ("password", PASSWORD),
+                    ("confirm", "other one!!"),
+                ][..],
+                "mismatch",
+            ),
+        ] {
+            let reply = post(&server, &path, "", pairs).await;
+            assert_eq!(location(&reply), format!("{path}?error={error}"));
+        }
+        assert!(!server.state.db.has_users().await.unwrap());
+
+        let reply = post(
+            &server,
+            &path,
+            "",
+            &[
+                ("username", " tony "),
+                ("password", PASSWORD),
+                ("confirm", PASSWORD),
+            ],
+        )
+        .await;
+        assert_eq!(location(&reply), "/");
+        let cookie = cookie_from(&reply);
+        let users = server.state.db.list_users().await.unwrap();
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].username, "tony");
+        assert!(users[0].is_admin && users[0].has_password);
+        assert_eq!(page(&server, "/admin/users", &cookie).await.status, 200);
+
+        let again = post(
+            &server,
+            &path,
+            "",
+            &[
+                ("username", "eve"),
+                ("password", PASSWORD),
+                ("confirm", PASSWORD),
+            ],
+        )
+        .await;
+        assert_eq!(location(&again), format!("{path}?error=expired"));
+        assert!(html(&server.get(&path).await).contains("expired"));
+        assert_eq!(server.state.db.list_users().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_first_link_does_nothing_once_anyone_exists() {
+        let server = TestServer::start().await;
+        let path = first_run_path(&server);
+        let (_, _) = sign_up(&server, "ann", false).await;
+
+        let reply = post(
+            &server,
+            &path,
+            "",
+            &[
+                ("username", "eve"),
+                ("password", PASSWORD),
+                ("confirm", PASSWORD),
+            ],
+        )
+        .await;
+        assert_eq!(location(&reply), format!("{path}?error=expired"));
+        let users = server.state.db.list_users().await.unwrap();
+        assert_eq!(users.len(), 1);
+        assert!(!users[0].is_admin);
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_setup_link_ignores_a_username() {
+        let server = TestServer::start().await;
+        let db = &server.state.db;
+        let id = accounts::create_user(db, "ann", 1000, false).await.unwrap();
+        let link = accounts::setup_link(db, common::PUBLIC_URL, id)
+            .await
+            .unwrap();
+        let path = link.strip_prefix(common::PUBLIC_URL).unwrap();
+        assert!(!html(&server.get(path).await).contains(r#"name="username""#));
+
+        let reply = post(
+            &server,
+            path,
+            "",
+            &[
+                ("username", "root"),
+                ("password", PASSWORD),
+                ("confirm", PASSWORD),
+            ],
+        )
+        .await;
+        assert_eq!(location(&reply), "/");
+        let users = db.list_users().await.unwrap();
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].username, "ann");
+        assert!(!users[0].is_admin);
     }
 }
 

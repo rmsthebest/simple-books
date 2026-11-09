@@ -17,6 +17,7 @@ use crate::server::{
     },
     error::AppError,
     http::client_ip,
+    now,
 };
 
 const MAX_USERNAME_KEY_CHARS: usize = 64;
@@ -89,6 +90,9 @@ pub async fn log_out(
 
 #[derive(Debug, Deserialize)]
 pub struct PasswordForm {
+    /// Only on the first admin's form: everyone else's was chosen by an admin.
+    #[serde(default)]
+    username: Option<String>,
     password: String,
     confirm: String,
 }
@@ -103,8 +107,24 @@ pub async fn set_password(
     if form.password != form.confirm {
         return back("mismatch");
     }
-    match accounts::complete_setup(&state.db, &token, form.password).await {
+    let done = match form.username {
+        Some(username) if state.first_run.is_valid(&token, now()) => {
+            let quota = i64::try_from(state.config.default_quota_bytes).unwrap_or(i64::MAX);
+            accounts::claim_first_run(
+                &state.db,
+                &state.first_run,
+                &token,
+                username.trim(),
+                form.password,
+                quota,
+            )
+            .await
+        }
+        _ => accounts::complete_setup(&state.db, &token, form.password).await,
+    };
+    match done {
         Ok(session) => signed_in(&session),
+        Err(AccountError::InvalidUsername) => back("username"),
         Err(AccountError::PasswordTooShort) => back("short"),
         Err(AccountError::PasswordTooLong) => back("long"),
         Err(AccountError::InvalidSetupLink) => back("expired"),

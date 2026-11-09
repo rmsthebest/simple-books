@@ -3,6 +3,7 @@
 
 use super::{
     device::{generate_secret, hash_secret},
+    first_run::FirstRun,
     password::{self, MAX_PASSWORD_BYTES, MIN_PASSWORD_CHARS, PasswordError},
     session,
 };
@@ -87,6 +88,33 @@ pub async fn setup_link_for(
         .await?
         .ok_or(AccountError::NoSuchUser)?;
     setup_link(db, public_url, user_id).await
+}
+
+/// Makes the first admin from the link a new server prints, and signs them in.
+/// Returns a session token. Mistakes in the form leave the link working. The link
+/// is checked before any hashing, and the account is only made if nobody exists.
+pub async fn claim_first_run(
+    db: &Db,
+    first_run: &FirstRun,
+    token: &str,
+    username: &str,
+    password: String,
+    quota_bytes: i64,
+) -> Result<String, AccountError> {
+    if !first_run.is_valid(token, now()) {
+        return Err(AccountError::InvalidSetupLink);
+    }
+    check_username(username)?;
+    check_new_password(&password)?;
+    let password_hash = password::hash(password).await?;
+    if !first_run.take(token, now()) {
+        return Err(AccountError::InvalidSetupLink);
+    }
+    let user_id = db
+        .create_first_admin(username, quota_bytes, &password_hash)
+        .await?
+        .ok_or(AccountError::InvalidSetupLink)?;
+    Ok(session::start(db, user_id).await?)
 }
 
 /// Who a setup link is for, to show on its page. `None` if it's no good.

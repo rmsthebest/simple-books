@@ -32,14 +32,19 @@ You need Docker (or Podman) and a reverse proxy with HTTPS. The examples use Cad
 3. Point your proxy at `127.0.0.1:3000`. [`deploy/Caddyfile.example`](deploy/Caddyfile.example)
    has what Kobo devices need: no compression on `/kobo/*`, an upload size limit, the
    client's address in `X-Real-IP`, and secrets kept out of the access log.
-4. Create the first user, an admin, and open the link it prints:
+4. On its first start, the server prints a link for making the admin account. Find
+   it, open it, and choose your username and password:
 
    ```sh
-   docker compose exec simple-books /app/simple-books admin create-user yourname --admin
+   docker compose logs simple-books | grep /setup/
    ```
 
-   Admins create everyone else from the Users page. For a forgotten password, either
-   the Users page or `admin setup-link <name>` makes a new link.
+   It works once, within 72 hours, and only while there are no users. Restarting
+   prints a new one.
+
+Admins create everyone else from the Users page, and it makes new links for forgotten
+passwords too. If the only admin is locked out, run
+`docker compose exec simple-books /app/simple-books admin setup-link <name>`.
 
 ## Connecting a Kobo
 

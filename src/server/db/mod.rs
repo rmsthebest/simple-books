@@ -130,6 +130,29 @@ impl Db {
         Ok(row.id)
     }
 
+    /// The first admin, with their password. `None` if anyone exists already, checked
+    /// in the same statement, so two at once can't both succeed.
+    pub async fn create_first_admin(
+        &self,
+        username: &str,
+        quota_bytes: i64,
+        password_hash: &str,
+    ) -> Result<Option<i64>, sqlx::Error> {
+        let at = now();
+        let row = sqlx::query!(
+            r#"INSERT INTO users (username, password_hash, is_admin, quota_bytes, created_at)
+               SELECT ?1, ?2, 1, ?3, ?4 WHERE NOT EXISTS (SELECT 1 FROM users)
+               RETURNING id AS "id!""#,
+            username,
+            password_hash,
+            quota_bytes,
+            at
+        )
+        .fetch_optional(&self.write)
+        .await?;
+        Ok(row.map(|r| r.id))
+    }
+
     pub async fn user_id_by_name(&self, username: &str) -> Result<Option<i64>, sqlx::Error> {
         let row = sqlx::query!(
             r#"SELECT id AS "id!" FROM users WHERE username = ?1"#,

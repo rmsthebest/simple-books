@@ -109,6 +109,7 @@ impl TestServer {
             uploads: Arc::default(),
             limits: Arc::new(Limits::default()),
             hardcover,
+            first_run: Arc::default(),
         };
 
         let epub = dir.path().join("book.epub");
