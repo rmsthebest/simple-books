@@ -1,4 +1,5 @@
-//! Users. The gate middleware keeps everyone but admins out.
+//! Users. The gate middleware keeps everyone but admins out, and the page checks
+//! again, so a path the gate reads differently can't show it.
 
 use leptos::prelude::*;
 
@@ -9,7 +10,7 @@ const MIB: i64 = 1024 * 1024;
 
 #[component]
 pub fn UsersPage() -> impl IntoView {
-    let user = signed_in();
+    let user = signed_in().filter(|user| user.is_admin);
     let state = app_state();
     let parts = request_parts();
     let revealed = match parts.extensions.get::<Revealed>() {

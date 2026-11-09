@@ -643,6 +643,60 @@ mod pages {
             assert_eq!(page(&server, &path, &cookie).await.status, 404, "{path}");
         }
     }
+
+    #[tokio::test]
+    async fn no_spelling_of_the_users_page_shows_it_to_a_non_admin() {
+        let server = TestServer::start().await;
+        let (_, admin) = sign_up(&server, "root", true).await;
+        let (_, ann) = sign_up(&server, "ann", false).await;
+        assert_eq!(page(&server, "/admin/users", &ann).await.status, 403);
+        for path in [
+            "/./admin/users",
+            "/%2e/admin/users",
+            "/x/../admin/users",
+            "/setup/../admin/users",
+            "/login/../admin/users",
+            "//admin/users",
+            "/admin/./users",
+            "/admin%2fusers",
+        ] {
+            for (who, cookie) in [("ann", &ann), ("root", &admin), ("nobody", &String::new())] {
+                let reply = page(&server, path, cookie).await;
+                assert_eq!(reply.status, 404, "{who} {path}");
+                assert!(!html(&reply).contains("root"), "{who} {path}");
+            }
+        }
+        // The plain spelling still works for an admin.
+        assert!(html(&page(&server, "/admin/users", &admin).await).contains("ann"));
+    }
+
+    #[tokio::test]
+    async fn pages_answer_nothing_but_get() {
+        let server = TestServer::start().await;
+        let (_, cookie) = sign_up(&server, "ann", false).await;
+        for method in [
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::PATCH,
+            Method::OPTIONS,
+        ] {
+            for path in ["/.gitkeep", "/shared/", "/", "/admin/users/", "/nope"] {
+                for who in ["", cookie.as_str()] {
+                    let reply = server
+                        .request(
+                            method.clone(),
+                            path,
+                            &[("cookie", who), ("sec-fetch-site", "same-origin")],
+                            Vec::new(),
+                        )
+                        .await;
+                    assert_eq!(reply.status, 405, "{method} {path}");
+                    assert!(reply.body.is_empty(), "{method} {path}");
+                }
+            }
+        }
+    }
 }
 
 mod permissions {

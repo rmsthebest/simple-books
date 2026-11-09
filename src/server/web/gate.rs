@@ -14,12 +14,29 @@ fn is_public(path: &str) -> bool {
     path == "/login" || path.starts_with("/setup/")
 }
 
+/// Whether the path is written the one way this app's own links write it. The page
+/// router tidies `/./admin`, `/x/../admin` or `/%2e/admin` into `/admin`, so the
+/// checks below would see one path and the router render another. No page's address
+/// needs any of these.
+fn is_plain(path: &str) -> bool {
+    !path.contains(['%', '\\'])
+        && !path.contains("//")
+        && path
+            .split('/')
+            .all(|segment| segment != "." && segment != "..")
+}
+
 pub async fn pages(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let path = request.uri().path().to_owned();
-    // Pages only answer these. Anything else finds no route, which is the right
-    // answer for it, signed in or not.
-    let renders = matches!(*request.method(), Method::GET | Method::HEAD);
-    if !renders || path.starts_with("/pkg/") {
+    if !is_plain(&path) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    // Pages and static files only answer these. Anything else that gets here found
+    // no route of its own.
+    if !matches!(*request.method(), Method::GET | Method::HEAD) {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    }
+    if path.starts_with("/pkg/") {
         return next.run(request).await;
     }
 

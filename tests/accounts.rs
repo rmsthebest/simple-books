@@ -566,7 +566,12 @@ async fn there_is_no_way_to_sign_up() {
                 b"username=x&password=y".to_vec(),
             )
             .await;
-        assert_eq!(reply.status, 404, "{path}");
+        // No route takes it: unknown addresses are 404, and pages refuse a POST.
+        assert!(
+            matches!(reply.status.as_u16(), 404 | 405),
+            "{path}: {}",
+            reply.status
+        );
     }
     assert!(!db(&server).has_users().await.unwrap());
 }
