@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM setup_tokens WHERE user_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "45e9cc820c4a0469f7205319cfa7d1c7a8b55ff9bbf832bec28dfa42adf18e12"
+}

@@ -1,0 +1,117 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.id AS \"id!\", b.owner_id, b.visibility, b.title, b.authors_json, b.cover_id,\n                      b.kepub_state, u.username AS shared_by,\n                      EXISTS (SELECT 1 FROM library_entries e\n                              WHERE e.book_id = b.id AND e.user_id = ?1) AS \"in_library!: bool\"\n               FROM books b JOIN users u ON u.id = b.owner_id\n               WHERE b.visibility = 'shared'\n               ORDER BY b.created_at DESC, b.title",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "owner_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "owner_id"
+          }
+        }
+      },
+      {
+        "name": "visibility",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "visibility"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "authors_json",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "authors_json"
+          }
+        }
+      },
+      {
+        "name": "cover_id",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "cover_id"
+          }
+        }
+      },
+      {
+        "name": "kepub_state",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "kepub_state"
+          }
+        }
+      },
+      {
+        "name": "shared_by",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "name": "in_library!: bool",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "11b6e16c28d71e92f6c8c181da393725112acf725462637a1c8779a49d51eb9e"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO hardcover_sign_ins\n                 (user_id, device_code, user_code, verification_url, poll_seconds, next_poll_at,\n                  expires_at, outcome)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)\n             ON CONFLICT (user_id) DO UPDATE SET\n                 device_code = excluded.device_code, user_code = excluded.user_code,\n                 verification_url = excluded.verification_url,\n                 poll_seconds = excluded.poll_seconds, next_poll_at = excluded.next_poll_at,\n                 expires_at = excluded.expires_at, outcome = NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "eaf1f203acbdb3d4fd798e6ee2dbe2d917b36f235fd4c1fdcad7a561065f6b34"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE hardcover_sign_ins SET outcome = ?1 WHERE user_id = ?2 AND device_code = ?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "fe171eb466d060582643c079e42845b8cefa160d576cf649065a7a175e0dc607"
+}

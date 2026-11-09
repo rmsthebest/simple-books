@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE hardcover_books SET due_at = MAX(due_at, ?1)\n             WHERE user_id = ?2 AND due_at IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "aaeb115e92ad9808a6d12967ba982aade75385d0bd7ed3567c50edb569729198"
+}

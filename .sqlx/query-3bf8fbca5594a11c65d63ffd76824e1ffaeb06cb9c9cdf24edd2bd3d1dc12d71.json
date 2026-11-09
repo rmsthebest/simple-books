@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM devices WHERE user_id = ?1 AND replaces_device_id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3bf8fbca5594a11c65d63ffd76824e1ffaeb06cb9c9cdf24edd2bd3d1dc12d71"
+}

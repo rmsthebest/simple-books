@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT u.quota_bytes,\n                      (SELECT COALESCE(SUM(b.original_size + COALESCE(b.kepub_size, 0)), 0)\n                       FROM books b WHERE b.owner_id = u.id) AS \"used!: i64\"\n               FROM users u WHERE u.id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "quota_bytes",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "quota_bytes"
+          }
+        }
+      },
+      {
+        "name": "used!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "1784140c58c11fd030969f4c1e43f1a8661846114aa0996c7093fc8b4068ac8b"
+}

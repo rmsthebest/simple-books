@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM library_entries WHERE user_id = ?1 AND book_id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "7ae8b6d0e542785fc97edada0c3a8499918c4c5c1607d5ba159ec5c099956692"
+}

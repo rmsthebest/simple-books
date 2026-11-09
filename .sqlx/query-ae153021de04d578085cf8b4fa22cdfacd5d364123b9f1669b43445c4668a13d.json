@@ -1,0 +1,93 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT u.id AS \"id!\", u.username, u.is_admin, u.disabled_at, u.password_hash,\n                      u.quota_bytes,\n                      (SELECT COALESCE(SUM(b.original_size + COALESCE(b.kepub_size, 0)), 0)\n                       FROM books b WHERE b.owner_id = u.id) AS \"used_bytes!: i64\"\n               FROM users u ORDER BY u.username",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "username",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "name": "is_admin",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "is_admin"
+          }
+        }
+      },
+      {
+        "name": "disabled_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "disabled_at"
+          }
+        }
+      },
+      {
+        "name": "password_hash",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "password_hash"
+          }
+        }
+      },
+      {
+        "name": "quota_bytes",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "quota_bytes"
+          }
+        }
+      },
+      {
+        "name": "used_bytes!: i64",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "ae153021de04d578085cf8b4fa22cdfacd5d364123b9f1669b43445c4668a13d"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT quota_bytes FROM users WHERE id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "quota_bytes",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "quota_bytes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f6eac7221a86d7263d30dfb7bdd43f9f12f6ebec6d887cfcf053a267ddd7d1ca"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO hardcover_accounts\n                 (user_id, hardcover_id, username, access_token, access_expires, refresh_token,\n                  broken_at, connected_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)\n             ON CONFLICT (user_id) DO UPDATE SET\n                 hardcover_id = excluded.hardcover_id, username = excluded.username,\n                 access_token = excluded.access_token, access_expires = excluded.access_expires,\n                 refresh_token = excluded.refresh_token, broken_at = NULL,\n                 connected_at = excluded.connected_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "6e019c53efc157019d32e092438d6f64003eb4d4405aeb3b2a7ca876b3c59cad"
+}

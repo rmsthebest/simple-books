@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT owner_id FROM books\n             WHERE id = ?1 AND (visibility = 'shared' OR owner_id = ?2)",
+  "describe": {
+    "columns": [
+      {
+        "name": "owner_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "owner_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "45c7038b4ddd65c2a5c7bb9fac9c036ba34622fe1c29fd095f33835bf4ff596d"
+}

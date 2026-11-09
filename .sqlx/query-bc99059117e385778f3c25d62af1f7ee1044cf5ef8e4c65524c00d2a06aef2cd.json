@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM setup_tokens WHERE token_hash = ?1 AND expires_at > ?2\n               RETURNING user_id AS \"user_id!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "setup_tokens",
+            "name": "user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bc99059117e385778f3c25d62af1f7ee1044cf5ef8e4c65524c00d2a06aef2cd"
+}

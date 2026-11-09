@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT replaces_device_id FROM devices WHERE id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "replaces_device_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "replaces_device_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "c91041ee76b74b9636bc2582fdd932081e70f9296630e42a69b6914544a81449"
+}

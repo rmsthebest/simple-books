@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE books SET kepub_state = ?1, kepub_size = ?2, updated_at = ?3\n             WHERE owner_id = ?4 AND id = ?5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "f794d793c5fa2417e5bb7efbc15edfaabfa5fca4f1536b22c90034cbb51a9629"
+}

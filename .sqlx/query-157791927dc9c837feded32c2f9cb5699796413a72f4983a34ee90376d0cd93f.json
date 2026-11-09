@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT change_seq FROM users WHERE id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "change_seq",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "change_seq"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "157791927dc9c837feded32c2f9cb5699796413a72f4983a34ee90376d0cd93f"
+}

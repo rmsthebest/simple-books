@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE hardcover_books\n             SET chosen_slug = ?1, match = 'pending', hc_book_id = NULL, hc_edition_id = NULL,\n                 hc_slug = NULL, hc_pages = NULL, due_at = ?2, rev = rev + 1, attempts = 0\n             WHERE user_id = ?3 AND book_id = ?4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "6737fb91119583f6255c68d16cdbe668b972d6ce174bf173911a6db850b276c0"
+}

@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT d.id AS \"device_id!\", d.user_id, d.force_full_sync, d.replaces_device_id\n               FROM devices d JOIN users u ON u.id = d.user_id\n               WHERE d.secret_hash = ?1 AND u.disabled_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "device_id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "user_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "force_full_sync",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "force_full_sync"
+          }
+        }
+      },
+      {
+        "name": "replaces_device_id",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "replaces_device_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "06fabb584625118a0feadb07c6cd8906e9bf9c3544e494b3743e35a1b507203b"
+}

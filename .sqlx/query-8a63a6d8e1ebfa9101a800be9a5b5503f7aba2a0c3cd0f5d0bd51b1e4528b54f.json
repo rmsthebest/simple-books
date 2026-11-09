@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE hardcover_books\n             SET match = ?1, hc_book_id = ?2, hc_edition_id = ?3, hc_slug = ?4, hc_pages = ?5,\n                 due_at = CASE WHEN ?1 = 'missing' AND rev = ?6 THEN NULL ELSE due_at END\n             WHERE user_id = ?7 AND book_id = ?8",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "8a63a6d8e1ebfa9101a800be9a5b5503f7aba2a0c3cd0f5d0bd51b1e4528b54f"
+}

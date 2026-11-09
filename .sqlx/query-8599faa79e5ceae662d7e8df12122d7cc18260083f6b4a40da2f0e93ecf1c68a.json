@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE hardcover_accounts\n             SET access_token = ?1, access_expires = ?2, refresh_token = ?3\n             WHERE user_id = ?4 AND refresh_token = ?5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "8599faa79e5ceae662d7e8df12122d7cc18260083f6b4a40da2f0e93ecf1c68a"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT first_seq FROM library_entries WHERE user_id = ?1 AND book_id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "first_seq",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "library_entries",
+            "name": "first_seq"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "a0d04ae7d1498de6cbca5d80e23b754df98c351daff31f8277ea56d3004acc2e"
+}

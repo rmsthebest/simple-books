@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT user_id AS \"user_id!\", device_code, poll_seconds, expires_at\n               FROM hardcover_sign_ins WHERE outcome IS NULL AND next_poll_at <= ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_sign_ins",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "device_code",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_sign_ins",
+            "name": "device_code"
+          }
+        }
+      },
+      {
+        "name": "poll_seconds",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_sign_ins",
+            "name": "poll_seconds"
+          }
+        }
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_sign_ins",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3add339eb6acf77e95af04c67bce6d88f78864f5c953f289206eb715d7760c2b"
+}

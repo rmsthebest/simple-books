@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT isbn FROM books WHERE id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "isbn",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "isbn"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "ee5e0a27891509b14e7e839f353a635bea97f2f35f4a9b55fb560bcaf1e4d0d8"
+}

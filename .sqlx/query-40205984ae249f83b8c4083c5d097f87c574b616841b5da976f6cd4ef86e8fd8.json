@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE hardcover_accounts SET broken_at = ?1\n             WHERE user_id = ?2 AND refresh_token = ?3 AND broken_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "40205984ae249f83b8c4083c5d097f87c574b616841b5da976f6cd4ef86e8fd8"
+}

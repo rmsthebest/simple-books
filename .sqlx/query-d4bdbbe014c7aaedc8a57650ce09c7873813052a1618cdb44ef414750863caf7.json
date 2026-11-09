@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO hardcover_books (user_id, book_id, want_status, want_percent, due_at, rev)\n             SELECT ?1, ?2, ?3, ?4, ?5, 1\n             WHERE EXISTS (SELECT 1 FROM hardcover_accounts WHERE user_id = ?1)\n             ON CONFLICT (user_id, book_id) DO UPDATE SET\n                 want_status = MAX(want_status, excluded.want_status),\n                 want_percent = excluded.want_percent,\n                 due_at = MIN(COALESCE(due_at, excluded.due_at), excluded.due_at),\n                 rev = rev + 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "d4bdbbe014c7aaedc8a57650ce09c7873813052a1618cdb44ef414750863caf7"
+}

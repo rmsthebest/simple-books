@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE hardcover_sign_ins SET poll_seconds = ?1, next_poll_at = ?2\n             WHERE user_id = ?3 AND device_code = ?4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "f650a5653e9032805335dde9c3937e4d3b26706ff23fe0a1078f5726dd34948a"
+}

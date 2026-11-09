@@ -1,0 +1,6 @@
+[env]
+# Queries are checked against the committed .sqlx/ cache. Run scripts/sqlx-prepare.sh after changing a query or migration.
+SQLX_OFFLINE = "true"
+# Leptos reads this when it's compiled to name the WASM file. cargo-leptos sets it, and a
+# plain `cargo build` needs the same value or pages ask for a file that doesn't exist.
+LEPTOS_OUTPUT_NAME = "simple-books"

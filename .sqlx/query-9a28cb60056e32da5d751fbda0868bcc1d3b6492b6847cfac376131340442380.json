@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO devices (user_id, name, secret_hash, replaces_device_id, created_at)\n               SELECT user_id, name, ?1, id, ?2 FROM devices WHERE id = ?3 AND user_id = ?4\n               RETURNING id AS \"id!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9a28cb60056e32da5d751fbda0868bcc1d3b6492b6847cfac376131340442380"
+}

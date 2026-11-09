@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE books SET kepub_state = 'pending', kepub_size = NULL, kepub_attempts = 0\n             WHERE id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e672f8996eaf4fb298606f1ca45d75c549239af5a7f720c5a3bb65ce38b23dba"
+}

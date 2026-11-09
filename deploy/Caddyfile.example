@@ -1,0 +1,21 @@
+books.example.com {
+    # Kobo devices need Content-Length on every response, so never compress these.
+    @compress not path /kobo/*
+    encode @compress zstd gzip
+
+    # Keep this at or above MAX_UPLOAD_MB.
+    request_body {
+        max_size 300MB
+    }
+
+    # Kobo tokens and setup links are secrets in the URL.
+    log {
+        format filter {
+            request>uri regexp "^/(kobo|setup)/[^/?]+" "/$1/REDACTED"
+        }
+    }
+
+    reverse_proxy 127.0.0.1:3000 {
+        header_up X-Real-IP {client_ip}
+    }
+}

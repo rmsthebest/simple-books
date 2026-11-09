@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO kobo_reading_states\n                 (user_id, book_id, status, percent, state_json, last_modified, change_seq)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)\n             ON CONFLICT (user_id, book_id) DO UPDATE SET\n                 status = excluded.status, percent = excluded.percent, state_json = excluded.state_json,\n                 last_modified = excluded.last_modified, change_seq = excluded.change_seq",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "dd16ab52dc91ba110220a95eb8dfd4ebb087e67b8bad58531e38c5733912fa3e"
+}

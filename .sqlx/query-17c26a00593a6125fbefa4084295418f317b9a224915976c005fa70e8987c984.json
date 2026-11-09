@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO book_tombstones (user_id, book_id, first_seq, change_seq, deleted_at)\n             VALUES (?1, ?2, ?3, ?4, ?5)\n             ON CONFLICT (user_id, book_id) DO UPDATE SET\n                 first_seq = MIN(first_seq, excluded.first_seq),\n                 change_seq = excluded.change_seq,\n                 deleted_at = excluded.deleted_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "17c26a00593a6125fbefa4084295418f317b9a224915976c005fa70e8987c984"
+}

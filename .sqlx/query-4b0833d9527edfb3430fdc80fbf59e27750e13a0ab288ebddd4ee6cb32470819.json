@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.user_id AS \"user_id!\", e.first_seq FROM library_entries e\n                   JOIN books b ON b.id = e.book_id\n                   WHERE e.book_id = ?1 AND e.user_id <> b.owner_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "library_entries",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "first_seq",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "library_entries",
+            "name": "first_seq"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "4b0833d9527edfb3430fdc80fbf59e27750e13a0ab288ebddd4ee6cb32470819"
+}

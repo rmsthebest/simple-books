@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE devices SET last_seen_at = ?1\n             WHERE id = ?2 AND (last_seen_at IS NULL OR last_seen_at < ?3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "1cb9ecab2ab35f9bfc8e29f09b5f69a13d25da0a471be0898b9c1ec47c2670a8"
+}

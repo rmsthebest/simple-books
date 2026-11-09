@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE library_entries\n             SET change_seq = ?1, first_seq = CASE WHEN ?2 THEN COALESCE(first_seq, ?1) ELSE first_seq END\n             WHERE user_id = ?3 AND book_id = ?4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "d651052dcb533344bb2ea5c7dd53e8bc0672c78b9fb0491cb6aa56335a7690f1"
+}

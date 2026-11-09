@@ -1,0 +1,45 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT kind AS \"kind!: String\", id AS \"id!: String\", seq AS \"seq!: i64\" FROM (\n                   SELECT 'book' AS kind, book_id AS id, change_seq AS seq FROM library_entries\n                    WHERE user_id = ?1 AND change_seq > ?3 AND first_seq IS NOT NULL\n                   UNION ALL\n                   SELECT 'tombstone', book_id, change_seq FROM book_tombstones\n                    WHERE user_id = ?1 AND change_seq > ?3 AND first_seq <= ?3\n                   UNION ALL\n                   SELECT 'state', s.book_id, s.change_seq\n                     FROM kobo_reading_states s\n                     JOIN library_entries e ON e.user_id = s.user_id AND e.book_id = s.book_id\n                    WHERE s.user_id = ?1 AND s.change_seq > ?3\n                      AND e.first_seq IS NOT NULL\n                      AND (e.first_seq <= ?2 OR e.change_seq < s.change_seq)\n               ) ORDER BY seq LIMIT ?4",
+  "describe": {
+    "columns": [
+      {
+        "name": "kind!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "name": "id!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kobo_reading_states",
+            "name": "book_id"
+          }
+        }
+      },
+      {
+        "name": "seq!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "kobo_reading_states",
+            "name": "change_seq"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "99f1799d9ce6248152e1f6d9723ad1fc54dc11c102ad67680ea65787a15cd269"
+}

@@ -1,0 +1,8 @@
+target
+data
+dev-data
+.git
+.github
+*.sqlite*
+*.md
+compose.yaml

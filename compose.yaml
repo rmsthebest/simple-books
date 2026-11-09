@@ -1,0 +1,35 @@
+# ───────────── Settings: edit these ─────────────
+x-image: &image "ghcr.io/rmsthebest/simple-books:0.1.0"
+x-user:  &user  "1000:1000"              # owner of the data directory on the host
+x-port:  &port  "127.0.0.1:3000:3000"    # keep 127.0.0.1 so only Caddy can reach it
+x-data:  &data  "./data:/data"           # where the database and books live on the host
+
+x-settings: &settings
+  PUBLIC_URL: "https://books.example.com"
+  CLIENT_IP_HEADER: "X-Real-IP"          # set by Caddy; must match your Caddyfile
+  # MAX_UPLOAD_MB: "256"                 # largest EPUB you can upload
+  DEFAULT_QUOTA_MB: "5000"               # storage per user; admins can change it per user
+  LOG_LEVEL: "info"
+  # KOBO_TRACE: "true"                   # logs Kobo protocol details, with tokens removed
+  # HARDCOVER_CLIENT_ID: ""              # empty turns off the Hardcover.app option
+# ──────────────── End of settings ───────────────
+
+services:
+  simple-books:
+    image: *image
+    user: *user
+    ports: [*port]
+    volumes: [*data]
+    environment: *settings
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "/app/simple-books", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

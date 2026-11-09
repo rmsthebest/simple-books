@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM hardcover_sign_ins WHERE user_id = ?1 AND device_code = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6e50eafc8012bd4a5780d737e16a735b58dde8999605f05526073a81f0066244"
+}

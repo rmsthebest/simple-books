@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE hardcover_books\n             SET sent_status = ?1, sent_pages = COALESCE(?2, sent_pages), attempts = 0,\n                 due_at = CASE WHEN rev = ?3 THEN NULL ELSE due_at END\n             WHERE user_id = ?4 AND book_id = ?5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "102769e75bed94d2968f663c355eec94115d5231a413a7424d0ad62259f0f0c2"
+}

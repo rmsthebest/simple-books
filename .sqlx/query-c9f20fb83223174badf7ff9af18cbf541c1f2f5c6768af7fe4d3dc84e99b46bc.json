@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT user_id AS \"user_id!\", hardcover_id, access_token, access_expires, refresh_token\n               FROM hardcover_accounts WHERE user_id = ?1 AND broken_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_accounts",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "hardcover_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_accounts",
+            "name": "hardcover_id"
+          }
+        }
+      },
+      {
+        "name": "access_token",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_accounts",
+            "name": "access_token"
+          }
+        }
+      },
+      {
+        "name": "access_expires",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_accounts",
+            "name": "access_expires"
+          }
+        }
+      },
+      {
+        "name": "refresh_token",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_accounts",
+            "name": "refresh_token"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c9f20fb83223174badf7ff9af18cbf541c1f2f5c6768af7fe4d3dc84e99b46bc"
+}

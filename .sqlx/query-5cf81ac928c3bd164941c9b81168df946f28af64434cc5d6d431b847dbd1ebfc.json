@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT username, broken_at FROM hardcover_accounts WHERE user_id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "username",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_accounts",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "name": "broken_at",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_accounts",
+            "name": "broken_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "5cf81ac928c3bd164941c9b81168df946f28af64434cc5d6d431b847dbd1ebfc"
+}

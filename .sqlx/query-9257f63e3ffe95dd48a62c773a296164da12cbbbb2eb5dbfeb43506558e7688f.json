@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO library_entries (user_id, book_id, first_seq, change_seq, added_at)\n         VALUES (?1, ?2, ?3, ?4, ?5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "9257f63e3ffe95dd48a62c773a296164da12cbbbb2eb5dbfeb43506558e7688f"
+}

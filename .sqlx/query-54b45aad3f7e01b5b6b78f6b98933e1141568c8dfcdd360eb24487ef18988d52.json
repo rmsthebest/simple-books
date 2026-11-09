@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT u.username FROM setup_tokens t JOIN users u ON u.id = t.user_id\n             WHERE t.token_hash = ?1 AND t.expires_at > ?2 AND u.disabled_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "username",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "54b45aad3f7e01b5b6b78f6b98933e1141568c8dfcdd360eb24487ef18988d52"
+}

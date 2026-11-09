@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT user_code, verification_url, outcome, expires_at\n             FROM hardcover_sign_ins WHERE user_id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_code",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_sign_ins",
+            "name": "user_code"
+          }
+        }
+      },
+      {
+        "name": "verification_url",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_sign_ins",
+            "name": "verification_url"
+          }
+        }
+      },
+      {
+        "name": "outcome",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_sign_ins",
+            "name": "outcome"
+          }
+        }
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_sign_ins",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "3eb169693ea008ac5e9cbb4dcffdfce19519de794e229125baca495fc476e37f"
+}

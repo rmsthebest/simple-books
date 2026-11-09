@@ -1,0 +1,13 @@
+[package]
+name = "kobo-conf"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Points a Kobo's config file at a sync server, changing nothing else"
+publish = false
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+proptest = "1"

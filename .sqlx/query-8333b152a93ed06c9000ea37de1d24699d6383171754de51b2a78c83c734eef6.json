@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.id AS \"id!\" FROM books b\n               JOIN library_entries e ON e.book_id = b.id AND e.user_id = ?1\n               WHERE b.cover_id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8333b152a93ed06c9000ea37de1d24699d6383171754de51b2a78c83c734eef6"
+}

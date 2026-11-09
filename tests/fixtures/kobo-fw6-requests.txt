@@ -1,0 +1,29 @@
+# Requests a Kobo Clara BW on firmware 6.0.279225 made to this server, in the
+# order first seen, with the number of times seen during the device tests.
+# IDs are placeholders and the token is removed. Regenerating isn't possible
+# without the device, so treat this as a record.
+#
+# Request headers it sent: accept-encoding, content-type, host, user-agent, x-kobo-synctoken
+#
+   17 GET /v1/initialization
+   17 GET /v1/user/profile
+   17 GET /v1/user/loyalty/benefits
+   17 GET /v1/products/books/subscriptions
+   17 GET /v1/deals
+   17 POST /v1/analytics/gettests
+   28 GET /v1/library/sync
+   22 GET /v1/user/wishlist
+   17 GET /v1/user/recommendations
+   70 GET /covers/{cover}/355/530/80/False/image.jpg
+    9 POST /v1/analytics/event
+  157 GET /covers/{cover}/149/223/70/False/image.jpg
+   64 GET /covers/{foreign-cover}/149/223/70/False/image.jpg
+    5 GET /covers/{cover}/1072/1448/80/False/image.jpg
+    5 GET /v1/library/{book}/metadata
+    4 GET /download/{book}/kepub
+    4 GET /v1/products/{id}/prices
+   96 GET /covers/{foreign-cover}/355/530/80/False/image.jpg
+    9 PUT /v1/library/{book}/state
+    1 GET /download/{book}/epub
+   33 GET /v1/products/{id}/nextread
+    2 DELETE /v1/library/{book}

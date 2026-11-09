@@ -1,0 +1,194 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT h.user_id AS \"user_id!\", h.book_id AS \"book_id!\", h.rev, h.attempts,\n                      b.title, b.authors_json, b.isbn, h.match AS \"matched\", h.chosen_slug,\n                      h.hc_book_id, h.hc_edition_id, h.hc_pages, h.want_status, h.want_percent,\n                      h.sent_pages\n               FROM hardcover_books h\n               JOIN books b ON b.id = h.book_id\n               JOIN hardcover_accounts a ON a.user_id = h.user_id AND a.broken_at IS NULL\n               WHERE h.due_at IS NOT NULL AND h.due_at <= ?1\n               ORDER BY h.due_at, h.user_id, h.book_id\n               LIMIT ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "book_id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "book_id"
+          }
+        }
+      },
+      {
+        "name": "rev",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "rev"
+          }
+        }
+      },
+      {
+        "name": "attempts",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "attempts"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "authors_json",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "authors_json"
+          }
+        }
+      },
+      {
+        "name": "isbn",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "isbn"
+          }
+        }
+      },
+      {
+        "name": "matched",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "match"
+          }
+        }
+      },
+      {
+        "name": "chosen_slug",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "chosen_slug"
+          }
+        }
+      },
+      {
+        "name": "hc_book_id",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "hc_book_id"
+          }
+        }
+      },
+      {
+        "name": "hc_edition_id",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "hc_edition_id"
+          }
+        }
+      },
+      {
+        "name": "hc_pages",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "hc_pages"
+          }
+        }
+      },
+      {
+        "name": "want_status",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "want_status"
+          }
+        }
+      },
+      {
+        "name": "want_percent",
+        "ordinal": 13,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "want_percent"
+          }
+        }
+      },
+      {
+        "name": "sent_pages",
+        "ordinal": 14,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "sent_pages"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "a2e615b20365c715d1aaf810ad5625c0ea090216624acb105163a8138b6f5598"
+}

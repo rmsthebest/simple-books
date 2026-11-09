@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE hardcover_books SET attempts = attempts + 1, due_at = ?1\n             WHERE user_id = ?2 AND book_id = ?3 AND rev = ?4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "2182eb99a3d8291db1c1cd6a59d6361fb7672ac00752404dca5402ea3f8ba051"
+}

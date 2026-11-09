@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT state_json, last_modified FROM kobo_reading_states WHERE user_id = ?1 AND book_id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "state_json",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kobo_reading_states",
+            "name": "state_json"
+          }
+        }
+      },
+      {
+        "name": "last_modified",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "kobo_reading_states",
+            "name": "last_modified"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "6634ab935ee1112b65c596a0fbdb9849e092784c67bee2d12a5b058e9c683a73"
+}

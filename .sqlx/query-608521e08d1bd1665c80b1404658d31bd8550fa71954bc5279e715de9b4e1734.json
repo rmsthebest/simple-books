@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT h.book_id AS \"book_id!\", b.title FROM hardcover_books h\n               JOIN books b ON b.id = h.book_id\n               WHERE h.user_id = ?1 AND h.match = 'missing' ORDER BY b.title",
+  "describe": {
+    "columns": [
+      {
+        "name": "book_id!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "book_id"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "title"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "608521e08d1bd1665c80b1404658d31bd8550fa71954bc5279e715de9b4e1734"
+}

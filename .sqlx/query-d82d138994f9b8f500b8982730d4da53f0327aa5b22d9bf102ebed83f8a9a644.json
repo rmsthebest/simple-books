@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT match AS matched, hc_slug FROM hardcover_books WHERE user_id = ?1 AND book_id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "matched",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "match"
+          }
+        }
+      },
+      {
+        "name": "hc_slug",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hardcover_books",
+            "name": "hc_slug"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "d82d138994f9b8f500b8982730d4da53f0327aa5b22d9bf102ebed83f8a9a644"
+}

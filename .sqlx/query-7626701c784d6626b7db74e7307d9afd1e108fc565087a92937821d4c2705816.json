@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE devices SET force_full_sync = 1 WHERE id = ?1 AND user_id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "7626701c784d6626b7db74e7307d9afd1e108fc565087a92937821d4c2705816"
+}
