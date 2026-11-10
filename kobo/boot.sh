@@ -42,7 +42,8 @@ fi
 sync
 say "starting the reader"
 "${APP_DIR}/reader-kobo" --boot </dev/null >/dev/null 2>&1
-say "reader-kobo exited with $?"
+status=$?
+say "reader-kobo exited with ${status}"
 # It returned, so it didn't hang. The reader removes this too, once home is
 # up.
 rm -f "${APP_DIR}/boot-started"
@@ -50,6 +51,9 @@ rm -f "${APP_DIR}/boot-started"
 # finding it up), or the screen's 8-bit mode.
 "${APP_DIR}/ssh.sh" stop
 "${APP_DIR}/wifi.sh" down
+# Power off (88) or restart (89), from the reader's power screen. Neither
+# comes back here, so rc.local doesn't go on to start Nickel.
+"${APP_DIR}/power.sh" "${status}"
 "${APP_DIR}/reader-kobo" --restore-screen >>"${LOG}" 2>&1
 sync
 exit 0

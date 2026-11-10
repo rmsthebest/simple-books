@@ -20,6 +20,7 @@ KOReader in [`koreader-clara-bw.md`](koreader-clara-bw.md).
 | `.adds/simple-books/wifi.sh` | `kobo/wifi.sh` | Turns Wi-Fi on and off for the reader |
 | `.adds/simple-books/boot.sh` | `kobo/boot.sh` | Runs the reader at boot, before Nickel, once booting into it is on |
 | `.adds/simple-books/boot-install.sh` | `kobo/boot-install.sh` | Turns booting into the reader on and off |
+| `.adds/simple-books/power.sh` | `kobo/power.sh` | Powers off or restarts, when the reader's power screen asks |
 | `.adds/nm/simple-books` | `kobo/nickelite-menu` | The **Simple Books**, **SSH on**, **SSH off**, **Boot into Simple Books** and **Boot into Nickel** entries in the Nickelite tab |
 | `.adds/simple-books/books/*.book` | made by the server, or by hand (below) | Books, on the home screen |
 
@@ -100,8 +101,12 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   Books** in the Nickelite tab comes back afterwards. **Not now** goes back to where you
   were, and it doesn't ask again until the cable is plugged in again. A charger doesn't
   count. Plugged in while asleep, it asks on waking.
-- **Leave** with **Exit to Nickel** in the menu, or by holding the power button for 3
-  seconds.
+- **Power:** holding the power button for 3 seconds brings up the power screen, with
+  **Power off**, **Restart**, **Go to Nickel** and **Cancel**. The place is saved first.
+  Powering off leaves "Switched off" on the screen; hold the power button to switch it
+  on again. If nothing is tapped for 15 seconds it goes to Nickel, so holding the button
+  is still the way out when taps don't work.
+- **Leave** with **Exit to Nickel** in the menu or on the power screen.
 - **Sleep** with a short press of the power button, or by leaving it alone for 10
   minutes. The sleep screen comes up at once, and the Kobo suspends 15 seconds later,
   once the screen has finished with the panel. Press the power button again to wake. It doesn't sleep while plugged in, since
@@ -147,8 +152,8 @@ shows a message saying what it did.
   **Boot into Simple Books** adds one line to it, just after the boot animation is
   stopped, which runs `boot.sh`. `boot.sh` runs the reader, and when the reader exits,
   for whatever reason, `rc.local` goes on to start Nickel just as it always does.
-  Leaving the reader for Nickel, from its menu or by holding the power button, works
-  the same as before.
+  Leaving the reader for Nickel works the same as before. **Power off** and **Restart**
+  on the power screen don't start Nickel: the next boot starts the reader again.
 - **Safety:**
   - Only an `rc.local` whose SHA-256 is known is changed, and a copy of it is kept in
     `/mnt/aux/simple-books/rc.local.orig`. Taking the line out has to give back exactly
@@ -177,8 +182,8 @@ shows a message saying what it did.
 
 - **It shows an error or nothing happens:** `reader.sh` starts Nickel again whenever the
   reader exits, crash or not. `reader.log` says why it stopped.
-- **Taps do nothing:** hold the power button for 3 seconds and let go. The reader leaves
-  for Nickel, saving the place.
+- **Taps do nothing:** hold the power button for 3 seconds, let go, and wait 15 seconds.
+  The reader leaves for Nickel, saving the place.
 - **The screen freezes:** hold the power button until the Kobo restarts. Nickel starts as
   usual, even when booting into the reader is on. This didn't erase anything in the
   KOReader tests.

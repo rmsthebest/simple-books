@@ -145,7 +145,13 @@ fn main() {
     // Plugged into a computer, then Not now.
     run.send("usb", Event::Computer(true));
     run.tap("search-hj", 296.0, 1376.0);
+    // The power button held, then Cancel.
+    run.send("power", Event::PowerHeld);
+    run.tap("search-hj", 536.0, 968.0);
     run.send("sleep", Event::Power);
+    // Held again on the sleep screen, then Power off.
+    run.send("power", Event::PowerHeld);
+    run.tap("switched-off", 536.0, 552.0);
 }
 
 /// From settings: the sync screen unpaired, showing a code, and paired.

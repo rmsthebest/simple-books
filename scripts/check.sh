@@ -32,6 +32,7 @@ sh -n kobo/ssh.sh
 sh -n kobo/wifi.sh
 sh -n kobo/boot.sh
 sh -n kobo/boot-install.sh
+sh -n kobo/power.sh
 sh -n scripts/test-boot-install.sh
 sh scripts/test-boot-install.sh
 sh -n scripts/kobo-deploy.sh

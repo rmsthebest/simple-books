@@ -118,6 +118,9 @@ say "reader-kobo exited with ${status}"
 # SSH, if the reader left it on, isn't left open for when Nickel turns
 # Wi-Fi on again.
 "${APP_DIR}/ssh.sh" stop
+# Power off (88) or restart (89), from the reader's power screen. It drew
+# what the panel keeps showing, so the screen is left as it is.
+"${APP_DIR}/power.sh" "${status}"
 # Nickel's screen settings, if the reader didn't get to restore them.
 "${APP_DIR}/reader-kobo" --restore-screen >>"${LOG}" 2>&1
 

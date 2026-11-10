@@ -32,7 +32,7 @@
 //!   forward. Click a link to follow it, and the top of the page for the
 //!   menu. On the home screen, click a cover to open its book.
 //! - ← and Page Up go back, → Page Down and Space forward, and Backspace
-//!   returns from a link. `P` is the power button.
+//!   returns from a link. `P` is the power button, and `O` holds it down.
 //! - `+` and `-` change the text size, `H` toggles hyphenation, `J`
 //!   justification and `K` Knuth–Plass line breaking. `[` and `]` change the
 //!   text weight, and `,` and `.` its gamma.
@@ -190,17 +190,18 @@ fn main() {
             events.push(Event::Tick);
         }
 
-        let mut exit = false;
+        // Exit to Nickel, or the power off or restart the Kobo would do.
+        let mut exit = None;
         for event in events {
             match session.handle(event, now, &mut panel) {
                 Ok(Flow::Continue) => {}
-                Ok(Flow::Exit) => exit = true,
+                Ok(flow) => exit = Some(flow),
                 Err(error) => eprintln!("{error}"),
             }
             tick_at = session.deadline(now);
         }
-        if exit {
-            println!("exit to Nickel");
+        if let Some(flow) = exit {
+            println!("{flow:?}");
             break;
         }
 
@@ -222,6 +223,7 @@ fn key_event(key: Key) -> Option<Event> {
         Key::Left | Key::PageUp => Event::Turn(Turn::Previous),
         Key::Backspace => Event::Back,
         Key::P => Event::Power,
+        Key::O => Event::PowerHeld,
         _ => return None,
     })
 }

@@ -218,11 +218,11 @@ impl Run {
     }
 
     /// Lets `wait` pass with nothing happening, then sends the tick.
-    fn tick_after(&mut self, wait: Duration) {
+    fn tick_after(&mut self, wait: Duration) -> Flow {
         self.now += wait;
         self.session
             .handle(Event::Tick, self.now, &mut self.device)
-            .unwrap();
+            .unwrap()
     }
 
     fn page(&self) -> Option<reader_core::PageRef> {
@@ -1122,4 +1122,71 @@ fn plugged_in_while_asleep_it_asks_on_waking() {
     assert!(run.session.in_usb(), "still plugged in, so it asks again");
     run.tap(USB_NOT_NOW.0, USB_NOT_NOW.1);
     assert_eq!(run.page(), page);
+}
+
+/// On the power screen, from holding the power button.
+const POWER_OFF: (f32, f32) = (536.0, 552.0);
+const POWER_RESTART: (f32, f32) = (536.0, 680.0);
+const POWER_NICKEL: (f32, f32) = (536.0, 808.0);
+const POWER_CANCEL: (f32, f32) = (536.0, 968.0);
+
+#[test]
+fn holding_the_power_button_asks_and_cancel_goes_back() {
+    let mut run = Run::new();
+    run.tap(FORWARD.0, FORWARD.1);
+    let page = run.page();
+    run.send(Event::PowerHeld);
+    assert!(run.session.in_power());
+    // A press, a turn or a tap between the buttons does nothing.
+    run.send(Event::Power);
+    run.send(Event::Turn(Turn::Next));
+    run.tap(536.0, 300.0);
+    assert!(run.session.in_power());
+    run.tap(POWER_CANCEL.0, POWER_CANCEL.1);
+    assert!(!run.session.in_power());
+    assert_eq!(run.page(), page);
+}
+
+#[test]
+fn power_off_and_restart_save_the_place_and_say_so() {
+    for (button, flow) in [(POWER_OFF, Flow::PowerOff), (POWER_RESTART, Flow::Restart)] {
+        let mut run = Run::new();
+        run.tap(FORWARD.0, FORWARD.1);
+        run.send(Event::PowerHeld);
+        run.device
+            .files
+            .retain(|name, _| !name.starts_with("position-"));
+        let before = run.device.last;
+        assert_eq!(run.tap(button.0, button.1), flow);
+        assert!(run.device.files.keys().any(|k| k.starts_with("position-")));
+        assert_ne!(run.device.last, before, "the panel says so");
+    }
+    let mut run = Run::at_home(Fake::default());
+    run.send(Event::PowerHeld);
+    assert_eq!(run.tap(POWER_NICKEL.0, POWER_NICKEL.1), Flow::Exit);
+}
+
+#[test]
+fn with_nothing_tapped_the_power_screen_goes_to_nickel() {
+    let mut run = Run::new();
+    run.send(Event::PowerHeld);
+    let deadline = run.session.deadline(run.now);
+    assert!(deadline <= run.now + Duration::from_secs(15));
+    assert_eq!(run.tick_after(Duration::from_secs(5)), Flow::Continue);
+    assert!(run.session.in_power());
+    assert_eq!(run.tick_after(Duration::from_secs(10)), Flow::Exit);
+    assert!(run.device.files.keys().any(|k| k.starts_with("position-")));
+}
+
+#[test]
+fn held_on_the_sleep_screen_it_asks_and_cancel_goes_back_to_the_page() {
+    let mut run = Run::new();
+    run.device.can_suspend = false;
+    let page = run.page();
+    run.send(Event::Power);
+    run.send(Event::PowerHeld);
+    assert!(run.session.in_power());
+    run.tap(POWER_CANCEL.0, POWER_CANCEL.1);
+    assert_eq!(run.page(), page);
+    assert!(!run.session.in_power());
 }

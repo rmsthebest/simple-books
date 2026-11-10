@@ -27,8 +27,12 @@
 //!   refreshes.
 //! - **Input:** the touch panel (`event1`, grabbed so nothing else sees it)
 //!   and the power button (`event2`). A press sleeps; holding it for
-//!   [`HOLD_TO_EXIT`] leaves for Nickel, the way out if touch isn't working. The sleep cover's events (`event0`)
-//!   are only logged for now, since what they mean isn't confirmed.
+//!   [`HOLD`] brings up the power screen: power off, restart or Nickel. It
+//!   goes to Nickel if nothing is tapped, so holding the button is still
+//!   the way out if touch isn't working. Powering off and restarting are
+//!   left to `reader.sh` and `boot.sh`, asked for with [`EXIT_POWER_OFF`]
+//!   and [`EXIT_RESTART`]. The sleep cover's events (`event0`) are only
+//!   logged for now, since what they mean isn't confirmed.
 //! - **Light, battery and sleep:** sysfs, as recorded in
 //!   `docs/clara-bw-hardware.md`.
 //! - **Sync:** with the server Nickel syncs with, or the one in `server.txt`
@@ -70,9 +74,14 @@ const COVER: &str = "/dev/input/event0";
 /// Which USB cable is in: `SDP=1` or `CDP=1` is a computer, `DCP=1` a
 /// charger. Nickel offers to connect for the first two.
 const EXTCON: &str = "/sys/class/extcon/extcon0/state";
-/// Holding the power button this long leaves for Nickel, even if the touch
-/// panel isn't working. Shorter presses sleep.
-const HOLD_TO_EXIT: Duration = Duration::from_secs(3);
+/// Holding the power button this long brings up the power screen, which
+/// goes to Nickel if nothing is tapped. Shorter presses sleep.
+const HOLD: Duration = Duration::from_secs(3);
+/// The exit status that asks `reader.sh` or `boot.sh` to power off, as
+/// KOReader's does.
+const EXIT_POWER_OFF: i32 = 88;
+/// The exit status that asks `reader.sh` or `boot.sh` to restart.
+const EXIT_RESTART: i32 = 89;
 /// Handling an event that takes this long is logged, such as opening a
 /// book.
 const SLOW: Duration = Duration::from_millis(300);
@@ -128,7 +137,15 @@ fn main() {
     let boot = args.iter().any(|a| a == "--boot");
     log!("starting{}", if boot { " at boot" } else { "" });
     match run(&dir, boot) {
-        Ok(()) => log!("back to Nickel"),
+        Ok(Flow::PowerOff) => {
+            log!("powering off");
+            std::process::exit(EXIT_POWER_OFF);
+        }
+        Ok(Flow::Restart) => {
+            log!("restarting");
+            std::process::exit(EXIT_RESTART);
+        }
+        Ok(Flow::Continue | Flow::Exit) => log!("back to Nickel"),
         Err(error) => {
             log!("stopping: {error}");
             std::process::exit(1);
@@ -152,10 +169,12 @@ fn open_log(dir: &Path) {
     }
 }
 
-fn run(dir: &Path, boot: bool) -> io::Result<()> {
+/// Runs until it's time to leave, and says why: [`Flow::Exit`] for Nickel,
+/// or to power off or restart.
+fn run(dir: &Path, boot: bool) -> io::Result<Flow> {
     if boot && finger_on_screen() {
         log!("a finger on the screen at boot: Nickel instead");
-        return Ok(());
+        return Ok(Flow::Exit);
     }
     let framebuffer = Framebuffer::open()?;
     log!("{framebuffer:?}");
@@ -213,7 +232,7 @@ fn run(dir: &Path, boot: bool) -> io::Result<()> {
             }
             match flow {
                 Ok(Flow::Continue) => {}
-                Ok(Flow::Exit) => return Ok(()),
+                Ok(flow) => return Ok(flow),
                 Err(error) => return Err(io::Error::other(error)),
             }
         }
@@ -234,6 +253,9 @@ struct Inputs {
     /// When the power button went down, if it's down. A release with no
     /// press, such as after the press that woke the device, does nothing.
     power_down: Option<Instant>,
+    /// The button has been down for [`HOLD`] and the power screen asked
+    /// for, so letting go does nothing.
+    held: bool,
     /// Plugged into a computer, as last seen.
     computer: bool,
 }
@@ -257,6 +279,7 @@ impl Inputs {
             taps: Touch::default(),
             width,
             power_down: None,
+            held: false,
             computer: plugged_into_computer(),
         })
     }
@@ -272,6 +295,13 @@ impl Inputs {
             fds.push(uevents.as_fd());
             fds.len() - 1
         });
+        // Held down, the power screen comes up without waiting to be let go.
+        let timeout = match self.power_down {
+            Some(down) if !self.held => {
+                timeout.min((down + HOLD).saturating_duration_since(Instant::now()))
+            }
+            _ => timeout,
+        };
         let ready = sys::poll(&fds, timeout)?;
         let now = Instant::now();
         let mut events = Vec::new();
@@ -288,15 +318,27 @@ impl Inputs {
                     continue;
                 }
                 match (raw.value, self.power_down.take()) {
-                    (1, _) => self.power_down = Some(now),
-                    (0, Some(down)) if now.duration_since(down) >= HOLD_TO_EXIT => {
-                        log!("power button held: leaving for Nickel");
-                        events.push(Event::Exit);
+                    (1, _) => {
+                        self.power_down = Some(now);
+                        self.held = false;
+                    }
+                    (0, Some(_)) if std::mem::take(&mut self.held) => {}
+                    (0, Some(down)) if now.duration_since(down) >= HOLD => {
+                        log!("power button held");
+                        events.push(Event::PowerHeld);
                     }
                     (0, Some(_)) => events.push(Event::Power),
                     _ => {}
                 }
             }
+        }
+        if let Some(down) = self.power_down
+            && !self.held
+            && now.duration_since(down) >= HOLD
+        {
+            log!("power button held");
+            self.held = true;
+            events.push(Event::PowerHeld);
         }
         if let Some(cover) = &self.cover
             && cover_at.is_some_and(|at| ready[at])

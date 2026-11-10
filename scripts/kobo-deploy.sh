@@ -30,10 +30,12 @@ cp kobo/ssh.sh "${staging}/simple-books/ssh.sh"
 cp kobo/wifi.sh "${staging}/simple-books/wifi.sh"
 cp kobo/boot.sh "${staging}/simple-books/boot.sh"
 cp kobo/boot-install.sh "${staging}/simple-books/boot-install.sh"
+cp kobo/power.sh "${staging}/simple-books/power.sh"
 cp kobo/nickelite-menu "${staging}/nm/simple-books"
 chmod 755 "${staging}/simple-books/reader-kobo" "${staging}/simple-books/reader.sh" \
     "${staging}/simple-books/ssh.sh" "${staging}/simple-books/wifi.sh" \
-    "${staging}/simple-books/boot.sh" "${staging}/simple-books/boot-install.sh"
+    "${staging}/simple-books/boot.sh" "${staging}/simple-books/boot-install.sh" \
+    "${staging}/simple-books/power.sh"
 
 tar -C "${staging}" -cf - simple-books nm |
     ${ssh_command} "root@${host}" 'tar -C /mnt/onboard/.adds -xf - && mkdir -p /mnt/onboard/.adds/simple-books/books'

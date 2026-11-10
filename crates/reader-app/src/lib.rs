@@ -37,6 +37,7 @@ mod home;
 mod library;
 mod menu;
 mod place;
+mod power_page;
 mod search;
 mod settings;
 mod shelf;
@@ -71,6 +72,8 @@ pub const AUTO_SLEEP: Duration = Duration::from_mins(10);
 /// The power button is ignored this long after waking, since the press that
 /// woke the device can arrive again once it's awake.
 const WAKE_GRACE: Duration = Duration::from_secs(2);
+/// How long the power screen waits for a tap before going to Nickel.
+const POWER_WAIT: Duration = Duration::from_secs(15);
 /// How long the sleep screen stays up before the first try at suspending.
 /// The Clara BW's display driver refuses to suspend while the panel is
 /// still powered from the last refresh; KOReader waits 15 s for the same
@@ -110,8 +113,10 @@ pub enum Event {
     /// Return from a link, from a key in the emulator.
     Back,
     Power,
-    /// Leave for Nickel at once, such as when the power button is held: the
-    /// way out even if the touch panel isn't working.
+    /// The power button has been held down: asks whether to power off,
+    /// restart or go to Nickel, and goes to Nickel if nothing is tapped.
+    PowerHeld,
+    /// Leave for Nickel at once.
     Exit,
     /// [`Session::deadline`] has passed.
     Tick,
@@ -202,6 +207,10 @@ pub enum Flow {
     Continue,
     /// Back to Nickel.
     Exit,
+    /// Switch the device off. The place is saved, and the panel says so.
+    PowerOff,
+    /// Restart the device. The place is saved, and the panel says so.
+    Restart,
 }
 
 /// What the reader has chosen, kept across books and restarts.
@@ -281,6 +290,13 @@ enum Mode {
     Usb {
         layout: usb_page::Layout,
         back: Back,
+    },
+    /// The power button was held: power off, restart or Nickel.
+    Power {
+        layout: power_page::Layout,
+        back: Back,
+        /// When it goes to Nickel, with nothing tapped.
+        nickel_at: Instant,
     },
     Reading,
     Menu(menu::Layout),
@@ -412,6 +428,11 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     /// Whether the screen offering to connect over USB is up.
     pub fn in_usb(&self) -> bool {
         matches!(self.mode, Mode::Usb { .. })
+    }
+
+    /// Whether the power screen is up, after the power button was held.
+    pub fn in_power(&self) -> bool {
+        matches!(self.mode, Mode::Power { .. })
     }
 
     /// Whether the sync screen is up.
@@ -742,6 +763,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     pub fn deadline(&self, now: Instant) -> Instant {
         let mut deadline = match self.mode {
             Mode::Asleep { suspend_at, .. } => suspend_at,
+            Mode::Power { nickel_at, .. } => nickel_at,
             Mode::Home(_)
             | Mode::Library(_)
             | Mode::Search(_)
@@ -775,6 +797,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let in_settings = matches!(self.mode, Mode::Settings(_));
         let in_sync = matches!(self.mode, Mode::Sync(_));
         let in_usb = matches!(self.mode, Mode::Usb { .. });
+        let power_until = match self.mode {
+            Mode::Power { nickel_at, .. } => Some(nickel_at),
+            _ => None,
+        };
         let in_menu = matches!(self.mode, Mode::Menu(_));
         let asleep = matches!(self.mode, Mode::Asleep { .. });
         match event {
@@ -782,6 +808,16 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 self.save(device);
                 return Ok(Flow::Exit);
             }
+            Event::Tick if power_until.is_some_and(|at| now >= at) => {
+                // Nothing tapped: maybe the touch panel isn't working.
+                self.save(device);
+                return Ok(Flow::Exit);
+            }
+            Event::PowerHeld => self.offer_power(device, now),
+            Event::Tap { x, y } if power_until.is_some() => {
+                return self.power_tap(x, y, now, device);
+            }
+            Event::Power | Event::Turn(_) | Event::Back if power_until.is_some() => {}
             Event::Tick => self.tick(now, device)?,
             Event::Computer(plugged) => self.computer(plugged, device, now)?,
             Event::Tap { .. } | Event::Power if asleep => self.wake(device, now)?,
@@ -1255,6 +1291,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                     }
                 }
             }
+            // Leaves for Nickel before it would sleep.
+            Mode::Power { .. } => {}
             Mode::Home(_)
             | Mode::Library(_)
             | Mode::Search(_)
@@ -1280,7 +1318,9 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Mode::Search(layout) => Back::Search(layout.query().to_owned(), layout.library_page()),
             Mode::Settings(_) => Back::Settings,
             Mode::Sync(_) => Back::Sync,
-            Mode::Usb { back, .. } | Mode::Asleep { back, .. } => back.clone(),
+            Mode::Usb { back, .. } | Mode::Power { back, .. } | Mode::Asleep { back, .. } => {
+                back.clone()
+            }
             Mode::Reading | Mode::Menu(_) => Back::Reading,
         }
     }
@@ -1370,6 +1410,60 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             }
             None => Ok(Flow::Continue),
         }
+    }
+
+    /// The power button was held: asks what to do, going back to the
+    /// screen that was up on Cancel.
+    fn offer_power(&mut self, device: &mut dyn Device, now: Instant) {
+        if matches!(self.mode, Mode::Power { .. }) {
+            return;
+        }
+        self.save(device);
+        let back = self.here();
+        let layout = power_page::Layout::new(self.screen.width());
+        let battery = battery_text(device);
+        layout.draw(&mut self.screen, &mut self.ui, &battery);
+        device.show(&self.screen, Refresh::Full);
+        self.guard.refreshing(now + Refresh::Full.duration());
+        self.mode = Mode::Power {
+            layout,
+            back,
+            nickel_at: now + POWER_WAIT,
+        };
+    }
+
+    fn power_tap(
+        &mut self,
+        x: f32,
+        y: f32,
+        now: Instant,
+        device: &mut dyn Device,
+    ) -> Result<Flow, AppError> {
+        let Mode::Power { layout, back, .. } = &self.mode else {
+            return Ok(Flow::Continue);
+        };
+        let (flow, said, below) = match layout.hit(x, y) {
+            Some(power_page::Action::PowerOff) => (
+                Flow::PowerOff,
+                "Switched off",
+                "Hold the power button to switch it on.",
+            ),
+            Some(power_page::Action::Restart) => (Flow::Restart, "Restarting", ""),
+            Some(power_page::Action::Nickel) => {
+                self.save(device);
+                return Ok(Flow::Exit);
+            }
+            Some(power_page::Action::Cancel) => {
+                let back = back.clone();
+                self.go_back(back, device, now)?;
+                return Ok(Flow::Continue);
+            }
+            None => return Ok(Flow::Continue),
+        };
+        self.save(device);
+        power_page::draw_final(&mut self.screen, &mut self.ui, said, below);
+        device.show(&self.screen, Refresh::Full);
+        Ok(flow)
     }
 
     fn sleep(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
