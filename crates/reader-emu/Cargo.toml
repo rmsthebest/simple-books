@@ -1,0 +1,20 @@
+[package]
+name = "reader-emu"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Runs the simple-books reader in a desktop window, with the Clara BW's screen size and refresh delays."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+book-convert = { path = "../book-convert" }
+book-format = { path = "../book-format" }
+# Loads X11 or Wayland at run time, so building needs no system libraries.
+minifb = "0.29"
+reader-core = { path = "../reader-core" }
+serde_json = "1"
