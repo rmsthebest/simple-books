@@ -91,3 +91,87 @@ pub fn parse<R: Read + Seek>(reader: R, limits: &Limits) -> Result<Book, EpubErr
     archive.verify_contents()?;
     opf::read_book(&mut archive)
 }
+
+/// A book opened to read what's inside, after the same checks as [`parse`].
+/// Every name it gives is an entry in the archive.
+pub struct Contents<'l, R> {
+    archive: archive::Archive<'l, R>,
+    package: opf::Opened,
+}
+
+impl<R> std::fmt::Debug for Contents<'_, R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Contents")
+            .field("spine", &self.package.spine)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'l, R: Read + Seek> Contents<'l, R> {
+    /// Opens and checks a whole EPUB.
+    ///
+    /// # Errors
+    ///
+    /// Any [`EpubError`], as for [`parse`].
+    pub fn open(reader: R, limits: &'l Limits) -> Result<Self, EpubError> {
+        let mut archive = archive::Archive::open(reader, limits)?;
+        archive.verify_contents()?;
+        let package = opf::open_package(&mut archive)?;
+        Ok(Self { archive, package })
+    }
+
+    pub fn metadata(&self) -> &Metadata {
+        &self.package.metadata
+    }
+
+    /// The documents to read, in order. Never empty.
+    pub fn spine(&self) -> &[String] {
+        &self.package.spine
+    }
+
+    /// The EPUB 3 navigation document.
+    pub fn nav(&self) -> Option<&str> {
+        self.package.nav.as_deref()
+    }
+
+    /// The EPUB 2 table of contents.
+    pub fn ncx(&self) -> Option<&str> {
+        self.package.ncx.as_deref()
+    }
+
+    /// The cover image, if the book names one.
+    pub fn cover(&self) -> Option<&str> {
+        self.package.cover.as_deref()
+    }
+
+    /// The media type the manifest gives an entry.
+    pub fn media_type(&self, name: &str) -> Option<&str> {
+        self.package.media_types.get(name).map(String::as_str)
+    }
+
+    /// Reads one entry, up to `limit` bytes. `None` if there's no such entry.
+    ///
+    /// # Errors
+    ///
+    /// [`EpubError::TooLarge`] past the limit, or [`EpubError::Corrupt`].
+    pub fn read(&mut self, name: &str, limit: u64) -> Result<Option<Vec<u8>>, EpubError> {
+        self.archive.read(name, limit)
+    }
+}
+
+/// Where a link in the document `from` points, as an entry name, without any
+/// `#fragment`. A link to a fragment alone points at `from` itself. `None` for
+/// a link that leaves the book.
+pub fn resolve(from: &str, href: &str) -> Option<String> {
+    let path = href.split(['#', '?']).next().unwrap_or_default();
+    if path.is_empty() {
+        return Some(from.to_owned());
+    }
+    let base = from.rsplit_once('/').map_or("", |(directory, _)| directory);
+    opf::resolve_href(base, path)
+}
+
+/// Turns a document's bytes into text, following its byte order mark.
+pub fn decode(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    xml::decode(bytes)
+}

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+pub const READER_FILE: &str = "reader.book";
+
 #[derive(Clone, Debug)]
 pub struct Layout {
     root: PathBuf,
@@ -42,6 +44,11 @@ impl Layout {
 
     pub fn kepub(&self, book: Uuid) -> PathBuf {
         self.book_dir(book).join("kobo.kepub.epub")
+    }
+
+    /// The book in the simple-books reader's own format.
+    pub fn reader(&self, book: Uuid) -> PathBuf {
+        self.book_dir(book).join(READER_FILE)
     }
 
     pub fn cover(&self, book: Uuid, cover: Uuid) -> PathBuf {

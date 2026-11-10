@@ -20,7 +20,7 @@ use common::{Part, TestServer};
 use image::{ImageEncoder, Rgb, RgbImage, codecs::png::PngEncoder};
 use serde_json::{Value, json};
 use simple_books::server::{
-    convert::{self, Tools, convert_next},
+    convert::{self, Tools, convert_next, reader},
     db::scope::UserScope,
     storage::reconcile,
 };
@@ -1535,4 +1535,89 @@ async fn a_plain_form_upload_comes_back_to_the_library() {
     assert!(html.contains("A Real Book"));
     assert!(html.contains("tap sync"));
     assert!(html.contains("Getting it ready"), "until it's converted");
+}
+
+async fn drain_reader(server: &TestServer, tools: &Tools) -> usize {
+    let mut attempts = 0;
+    while reader::convert_next(&server.state, tools).await.unwrap() {
+        attempts += 1;
+    }
+    attempts
+}
+
+/// The real thing, as a child of the test binary, with its limits and all.
+#[tokio::test]
+async fn books_are_converted_for_the_reader_after_their_kepub() {
+    let server = TestServer::start().await;
+    let (scope, token) = server.user("ann").await;
+    let cookie = server.cookie(&scope).await;
+    let layout = &server.state.layout;
+    let id = upload(&server, &cookie, &epub("x")).await;
+
+    assert_eq!(
+        drain_reader(&server, &working()).await,
+        0,
+        "the KEPUB goes first"
+    );
+    drain(&server, &working()).await;
+    assert_eq!(drain_reader(&server, &working()).await, 1);
+    assert!(is_empty(&layout.tmp_dir()), "no scratch left behind");
+
+    let file = fs::File::open(layout.reader(id)).unwrap();
+    let mut book = book_format::BookReader::open(file, book_format::Limits::default()).unwrap();
+    assert_eq!(book.manifest().title, "A Real Book");
+    let chapter = book.chapter(0).unwrap();
+    assert_eq!(chapter.blocks[0].spans[0].text, "Hello");
+    let mode = fs::metadata(layout.reader(id))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+
+    assert_eq!(drain_reader(&server, &working()).await, 0, "done once");
+    let synced = server.sync(&token, None).await.json();
+    assert_eq!(
+        synced.as_array().unwrap().len(),
+        1,
+        "the Kobo sync is as before"
+    );
+
+    // Gone from disk: noticed at startup, and made again.
+    fs::remove_file(layout.reader(id)).unwrap();
+    let report = reconcile::run(layout, &server.state.db).await.unwrap();
+    assert_eq!(report.requeued_reader_conversions, 1);
+    assert_eq!(drain_reader(&server, &working()).await, 1);
+    assert!(layout.reader(id).exists());
+
+    // Deleted with the book.
+    assert_eq!(post_delete(&server, id, &cookie).await, 303);
+    assert_nothing_left(&server);
+}
+
+#[tokio::test]
+async fn a_book_the_reader_cant_have_still_reaches_the_kobo() {
+    let server = TestServer::start().await;
+    let (scope, token) = server.user("ann").await;
+    let cookie = server.cookie(&scope).await;
+    // Valid as an EPUB, but with no text at all.
+    let opf = OPF.replace("c1.xhtml", "empty.xhtml");
+    let mut bytes = epub_with(&opf, &png(600, 900), b"x");
+    {
+        let mut zip = zip::ZipWriter::new_append(Cursor::new(&mut bytes)).unwrap();
+        zip.start_file("OEBPS/empty.xhtml", SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"<html><body><p> </p></body></html>")
+            .unwrap();
+        zip.finish().unwrap();
+    }
+    let id = upload(&server, &cookie, &bytes).await;
+    drain(&server, &working()).await;
+
+    let attempts = drain_reader(&server, &working()).await;
+    assert_eq!(attempts, 3, "tried, then given up on");
+    assert!(!server.state.layout.reader(id).exists());
+    assert!(is_empty(&server.state.layout.tmp_dir()));
+
+    let synced = server.sync(&token, None).await.json();
+    assert_eq!(synced.as_array().unwrap().len(), 1);
 }

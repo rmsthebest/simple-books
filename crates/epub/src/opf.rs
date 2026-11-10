@@ -46,7 +46,21 @@ pub struct Metadata {
     pub isbn: Option<String>,
 }
 
-pub(crate) fn read_book<R: Read + Seek>(archive: &mut Archive<'_, R>) -> Result<Book, EpubError> {
+/// What the package document says, with every href resolved to a name in the
+/// archive.
+pub(crate) struct Opened {
+    pub(crate) metadata: Metadata,
+    /// The spine's documents that exist, in reading order, leaving out images.
+    pub(crate) spine: Vec<String>,
+    pub(crate) nav: Option<String>,
+    pub(crate) ncx: Option<String>,
+    pub(crate) cover: Option<String>,
+    pub(crate) media_types: HashMap<String, String>,
+}
+
+pub(crate) fn open_package<R: Read + Seek>(
+    archive: &mut Archive<'_, R>,
+) -> Result<Opened, EpubError> {
     check_drm(archive)?;
     let max_xml = archive.limits().max_xml_bytes;
 
@@ -63,29 +77,69 @@ pub(crate) fn read_book<R: Read + Seek>(archive: &mut Archive<'_, R>) -> Result<
     let base = package_path
         .rsplit_once('/')
         .map_or("", |(directory, _)| directory);
+    let path_of =
+        |item: &ManifestItem| resolve_href(base, &item.href).filter(|path| archive.contains(path));
 
-    let readable = package.spine.iter().any(|id| {
-        package
-            .manifest
-            .get(id)
-            .and_then(|item| resolve_href(base, &item.href))
-            .is_some_and(|path| archive.contains(&path))
-    });
-    if !readable {
+    let spine: Vec<(String, &ManifestItem)> = package
+        .spine
+        .iter()
+        .filter_map(|id| package.manifest.get(id))
+        .filter_map(|item| Some((path_of(item)?, item)))
+        .collect();
+    if spine.is_empty() {
         return Err(EpubError::NoContent);
     }
+    // A spine should hold only documents, but some books list an image too.
+    let spine = spine
+        .into_iter()
+        .filter(|(_, item)| !Package::is_image(item))
+        .map(|(path, _)| path)
+        .collect();
 
-    let cover = match package
+    let nav = package
+        .manifest
+        .values()
+        .find(|item| item.has_property("nav"))
+        .and_then(path_of);
+    let ncx = package
+        .toc
+        .as_deref()
+        .and_then(|id| package.manifest.get(id))
+        .or_else(|| {
+            package
+                .manifest
+                .values()
+                .find(|item| item.media_type == "application/x-dtbncx+xml")
+        })
+        .and_then(path_of);
+    let cover = package
         .cover_href()
-        .and_then(|href| resolve_href(base, href))
-    {
+        .and_then(|href| resolve_href(base, href));
+    let media_types = package
+        .manifest
+        .values()
+        .filter_map(|item| Some((path_of(item)?, item.media_type.clone())))
+        .collect();
+    Ok(Opened {
+        metadata: package.metadata,
+        spine,
+        nav,
+        ncx,
+        cover,
+        media_types,
+    })
+}
+
+pub(crate) fn read_book<R: Read + Seek>(archive: &mut Archive<'_, R>) -> Result<Book, EpubError> {
+    let opened = open_package(archive)?;
+    let cover = match opened.cover {
         Some(path) => archive
             .read(&path, archive.limits().max_cover_bytes)?
             .map(CoverBytes),
         None => None,
     };
     Ok(Book {
-        metadata: package.metadata,
+        metadata: opened.metadata,
         cover,
     })
 }
@@ -135,11 +189,19 @@ struct ManifestItem {
     properties: String,
 }
 
+impl ManifestItem {
+    fn has_property(&self, name: &str) -> bool {
+        self.properties.split_whitespace().any(|p| p == name)
+    }
+}
+
 #[derive(Default)]
 struct Package {
     metadata: Metadata,
     manifest: HashMap<String, ManifestItem>,
     spine: Vec<String>,
+    /// The spine's `toc` attribute: the EPUB 2 NCX's id.
+    toc: Option<String>,
     cover_meta: Option<String>,
 }
 
@@ -151,13 +213,10 @@ impl Package {
     /// EPUB 3 marks the cover in the manifest, EPUB 2 in a `meta`. Failing both,
     /// plenty of books still name it "cover".
     fn cover_href(&self) -> Option<&str> {
-        let by_property = self.manifest.values().find(|item| {
-            Self::is_image(item)
-                && item
-                    .properties
-                    .split_whitespace()
-                    .any(|p| p == "cover-image")
-        });
+        let by_property = self
+            .manifest
+            .values()
+            .find(|item| Self::is_image(item) && item.has_property("cover-image"));
         let by_meta = || {
             let item = self.manifest.get(self.cover_meta.as_deref()?)?;
             Self::is_image(item).then_some(item)
@@ -234,7 +293,10 @@ fn parse_package(text: &str) -> Result<Package, EpubError> {
             match (section.map(|(s, _)| s), name.as_str()) {
                 (None, "metadata") => section = Some(("metadata", depth)),
                 (None, "manifest") => section = Some(("manifest", depth)),
-                (None, "spine") => section = Some(("spine", depth)),
+                (None, "spine") => {
+                    section = Some(("spine", depth));
+                    package.toc = xml::attribute(element, "toc");
+                }
                 (Some("metadata"), "meta") => {
                     field = open_meta(element, &mut package, &mut gathered).map(|f| (f, depth));
                 }
@@ -450,7 +512,7 @@ fn date_prefix(value: &str) -> Option<String> {
 
 /// Turns a manifest href into a name inside the archive. An href that climbs out
 /// of the archive, or points outside it, has no answer.
-fn resolve_href(base: &str, href: &str) -> Option<String> {
+pub(crate) fn resolve_href(base: &str, href: &str) -> Option<String> {
     let href = href.split(['#', '?']).next()?;
     if href.contains("://") || href.starts_with('/') {
         return None;

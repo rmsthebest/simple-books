@@ -1,7 +1,9 @@
 //! Converts books to KEPUB, one at a time, in the background. A book stays out of
 //! everyone's sync until this finishes, because a Kobo needs the final size.
+//! When no KEPUB is waiting, books are converted to the reader's own format.
 
 pub mod limited;
+pub mod reader;
 
 use std::{
     path::{Path, PathBuf},
@@ -80,7 +82,11 @@ pub async fn run(state: AppState, tools: Tools) {
         );
     }
     loop {
-        match convert_next(&state, &tools, version.as_deref()).await {
+        let worked = match convert_next(&state, &tools, version.as_deref()).await {
+            Ok(false) => reader::convert_next(&state, &tools).await,
+            other => other,
+        };
+        match worked {
             Ok(true) => {}
             Ok(false) => {
                 let _ = timeout(IDLE_RECHECK, state.conversions.notified()).await;
@@ -140,7 +146,7 @@ async fn note_mark_failure(state: &AppState, job: Conversion, error: &BookError)
 }
 
 #[derive(Debug, thiserror::Error)]
-enum AttemptError {
+pub(crate) enum AttemptError {
     #[error("couldn't run it: {0}")]
     Io(#[from] std::io::Error),
     #[error("it took longer than {0:?}")]
@@ -216,7 +222,12 @@ async fn run_sandboxed(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    wait_for(command, tools.timeout).await
+}
 
+/// Runs a child to completion, or kills it at `limit`. Its first stderr is kept
+/// for the error, and the rest is drained so it can't block on a full pipe.
+pub(crate) async fn wait_for(mut command: Command, limit: Duration) -> Result<(), AttemptError> {
     let mut child = command.spawn()?;
     let mut stderr = String::new();
     let captured = child.stderr.take();
@@ -230,9 +241,9 @@ async fn run_sandboxed(
         }
         child.wait().await
     };
-    let status = timeout(tools.timeout, wait)
+    let status = timeout(limit, wait)
         .await
-        .map_err(|_| AttemptError::TimedOut(tools.timeout))??;
+        .map_err(|_| AttemptError::TimedOut(limit))??;
 
     if status.success() {
         Ok(())

@@ -12,7 +12,7 @@ use simple_books::server::{
     AppState,
     auth::{accounts, first_run::FirstRun},
     config::Config,
-    convert::{self, Tools, limited},
+    convert::{self, Tools, limited, reader},
     db::Db,
     hardcover::Hardcover,
     http::limit::Limits,
@@ -57,6 +57,14 @@ enum Command {
         #[arg(last = true)]
         args: Vec<OsString>,
     },
+    /// Converts one EPUB to the reader's format, inside limits. Internal.
+    #[command(hide = true)]
+    ConvertBook {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -75,9 +83,57 @@ enum AdminCommand {
     SetupLink { username: String },
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    match run().await {
+fn main() -> ExitCode {
+    // Everything this process creates is private, the database included.
+    rustix::process::umask(rustix::fs::Mode::from_bits_truncate(0o077));
+    let cli = Cli::parse();
+
+    // The internal commands come first: they run with a cleared environment
+    // and need no settings, and before any runtime threads exist, since they
+    // limit the process they're in.
+    match &cli.command {
+        Some(Command::ExecLimited {
+            program,
+            work,
+            read,
+            args,
+        }) => {
+            let error = limited::exec(&limited::Limits {
+                program: program.clone(),
+                read: read.clone(),
+                work: work.clone(),
+                args: args.clone(),
+            });
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+        Some(Command::ConvertBook { input, output }) => {
+            let job = reader::ConvertBook {
+                input: input.clone(),
+                output: output.clone(),
+            };
+            return match reader::convert_book(&job) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        _ => {}
+    }
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match runtime.block_on(run(cli)) {
         Ok(code) => code,
         Err(error) => {
             eprintln!("error: {error}");
@@ -86,28 +142,7 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run() -> Result<ExitCode, AnyError> {
-    // Everything this process creates is private, the database included.
-    rustix::process::umask(rustix::fs::Mode::from_bits_truncate(0o077));
-
-    let cli = Cli::parse();
-    // First, because it runs with a cleared environment and needs no settings.
-    if let Some(Command::ExecLimited {
-        program,
-        work,
-        read,
-        args,
-    }) = &cli.command
-    {
-        let error = limited::exec(&limited::Limits {
-            program: program.clone(),
-            read: read.clone(),
-            work: work.clone(),
-            args: args.clone(),
-        });
-        return Err(error.into());
-    }
-
+async fn run(cli: Cli) -> Result<ExitCode, AnyError> {
     let config = Config::from_env()?;
 
     match cli.command.unwrap_or(Command::Serve) {
@@ -116,7 +151,9 @@ async fn run() -> Result<ExitCode, AnyError> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Healthcheck => healthcheck(&config).await,
-        Command::ExecLimited { .. } => unreachable!("handled above"),
+        Command::ExecLimited { .. } | Command::ConvertBook { .. } => {
+            unreachable!("handled in main")
+        }
         Command::Admin(command) => {
             run_admin(&config, command).await?;
             Ok(ExitCode::SUCCESS)

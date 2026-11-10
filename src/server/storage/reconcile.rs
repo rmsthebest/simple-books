@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::{
     covers,
     files::{create_private_dir, make_private, write_atomic},
-    layout::Layout,
+    layout::{Layout, READER_FILE},
 };
 use crate::server::db::{Db, jobs::StoredBook};
 
@@ -20,6 +20,7 @@ pub struct Report {
     pub removed_dirs: usize,
     pub removed_files: usize,
     pub requeued_conversions: usize,
+    pub requeued_reader_conversions: usize,
     pub rebuilt_thumbs: usize,
     pub missing_originals: usize,
 }
@@ -102,6 +103,7 @@ async fn remove_stale_files(
     let keep = |name: &str| {
         name == "original.epub"
             || name == "kobo.kepub.epub"
+            || name == READER_FILE
             || cover.as_deref().is_some_and(|cover| {
                 name == format!("cover-{cover}.jpg") || name == format!("thumb-{cover}.jpg")
             })
@@ -132,6 +134,10 @@ async fn check_book(
     if book.kepub_ready && !tokio::fs::try_exists(layout.kepub(book.id)).await? {
         db.requeue_conversion(book.id).await?;
         report.requeued_conversions += 1;
+    }
+    if book.reader_ready && !tokio::fs::try_exists(layout.reader(book.id)).await? {
+        db.requeue_reader_conversion(book.id).await?;
+        report.requeued_reader_conversions += 1;
     }
     if let Some(cover) = book.cover_id {
         let thumb = layout.thumb(book.id, cover);

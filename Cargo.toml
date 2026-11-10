@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/epub", "crates/kobo-conf"]
+members = [".", "crates/book-convert", "crates/book-format", "crates/epub", "crates/kobo-conf"]
 resolver = "3"
 
 [workspace.package]
@@ -44,6 +44,8 @@ path = "src/main.rs"
 required-features = ["ssr"]
 
 [dependencies]
+book-convert = { path = "crates/book-convert", optional = true }
+book-format = { path = "crates/book-format", optional = true }
 epub = { path = "crates/epub", optional = true }
 leptos = { version = "=0.8.23", features = ["islands"] }
 leptos_meta = "0.8"
@@ -132,6 +134,8 @@ ssr = [
     "dep:argon2",
     "dep:axum",
     "dep:base64",
+    "dep:book-convert",
+    "dep:book-format",
     "dep:bytes",
     "dep:clap",
     "dep:epub",

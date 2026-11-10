@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", cover_id, kepub_state FROM books",
+  "query": "SELECT id AS \"id!\", cover_id, kepub_state, reader_size FROM books",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,17 @@
             "name": "kepub_state"
           }
         }
+      },
+      {
+        "name": "reader_size",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "reader_size"
+          }
+        }
       }
     ],
     "parameters": {
@@ -43,8 +54,9 @@
     "nullable": [
       false,
       true,
-      false
+      false,
+      true
     ]
   },
-  "hash": "d2c115e50376916448372eab51c82f0c0833dac3acdf13a57d6a50af768030f7"
+  "hash": "cd084b14b843a836a078947c7f44bea25aa0fe1b3a37ac248455c74a059bb080"
 }
