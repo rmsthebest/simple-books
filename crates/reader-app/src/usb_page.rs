@@ -39,7 +39,8 @@ impl Layout {
         );
         let buttons = rects
             .into_iter()
-            .zip([(Action::Connect, "Connect"), (Action::NotNow, "Not now")])
+            // Connect on the right, where going ahead usually is.
+            .zip([(Action::NotNow, "Not now"), (Action::Connect, "Connect")])
             .map(|(rect, (action, label))| (rect, action, label))
             .collect();
         Self { buttons }

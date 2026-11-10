@@ -1064,8 +1064,8 @@ fn ssh_without_wifi_says_why() {
     run.until_idle();
 }
 
-const USB_CONNECT: (f32, f32) = (296.0, 1376.0);
-const USB_NOT_NOW: (f32, f32) = (776.0, 1376.0);
+const USB_NOT_NOW: (f32, f32) = (296.0, 1376.0);
+const USB_CONNECT: (f32, f32) = (776.0, 1376.0);
 
 #[test]
 fn a_computer_plugged_in_offers_nickel_for_usb() {

@@ -144,7 +144,7 @@ fn main() {
     }
     // Plugged into a computer, then Not now.
     run.send("usb", Event::Computer(true));
-    run.tap("search-hj", 776.0, 1376.0);
+    run.tap("search-hj", 296.0, 1376.0);
     run.send("sleep", Event::Power);
 }
 
