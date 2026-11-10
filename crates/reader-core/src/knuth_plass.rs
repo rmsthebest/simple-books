@@ -13,6 +13,8 @@
 use book_format::SOFT_HYPHEN;
 use parley::Layout;
 
+use crate::typeset::Link;
+
 /// A box, glue or penalty. Widths are in pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Item {
@@ -266,7 +268,7 @@ const HYPHEN_COST: f32 = 50.0;
 /// particular state, if it can't: right-to-left text, a word wider than the
 /// column, or Parley not breaking where it was asked to.
 pub(crate) fn break_layout(
-    layout: &mut Layout<()>,
+    layout: &mut Layout<Link>,
     text: &str,
     width: f32,
     indent: f32,

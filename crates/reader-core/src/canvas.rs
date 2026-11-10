@@ -14,6 +14,8 @@ impl std::fmt::Debug for Canvas {
 }
 
 pub(crate) const WHITE: u8 = 255;
+/// A pixel darker than this has ink on it, for underlines to avoid.
+const INKED: u8 = 224;
 
 impl Canvas {
     pub fn new(width: u32, height: u32) -> Self {
@@ -48,6 +50,42 @@ impl Canvas {
                 // dst × (1 − a), rounded.
                 let keep = u16::from(255 - a);
                 *dst = ((u16::from(*dst) * keep + 127) / 255) as u8;
+            }
+        });
+    }
+
+    /// Draws an underline, leaving a `gap` around ink already in its way,
+    /// such as a descender, so the line doesn't run through letters.
+    pub(crate) fn underline(&mut self, left: i32, top: i32, width: u32, height: u32, gap: u32) {
+        let page_width = self.width as i32;
+        let x0 = left.max(0);
+        let x1 = (left + width as i32).min(page_width);
+        if x0 >= x1 {
+            return;
+        }
+        let gap = gap as i32;
+        let rows = (top - gap).max(0)..(top + height as i32 + gap).min(self.height as i32);
+        // Columns with ink near the line, widened by the gap on each side.
+        let span = (x1 - x0) as usize;
+        let mut blocked = vec![false; span];
+        for x in (x0 - gap).max(0)..(x1 + gap).min(page_width) {
+            let inked = rows
+                .clone()
+                .any(|y| self.pixels[(y * page_width + x) as usize] < INKED);
+            if inked {
+                let from = (x - gap - x0).max(0);
+                let to = (x + gap + 1 - x0).min(span as i32);
+                for b in from..to {
+                    blocked[b as usize] = true;
+                }
+            }
+        }
+        // Rows start at x0, as `blocked` does.
+        self.each_row(left, top, width, height, |row, _, _, _| {
+            for (px, blocked) in row.iter_mut().zip(&blocked) {
+                if !blocked {
+                    *px = 0;
+                }
             }
         });
     }
@@ -106,6 +144,19 @@ mod tests {
             0, 0, 255, 255,
             255, 255, 255, 0,
         ]);
+    }
+
+    #[test]
+    fn underlines_leave_a_gap_around_ink() {
+        let mut canvas = Canvas::new(10, 3);
+        // A descender in column 5, crossing the line's row.
+        canvas.ink(5, 0, 1, 3, &[255; 3]);
+        canvas.underline(-2, 1, 14, 1, 1);
+        assert_eq!(
+            &canvas.pixels()[10..20],
+            &[0, 0, 0, 0, 255, 0, 255, 0, 0, 0]
+        );
+        assert_eq!(canvas.pixels()[0], 255);
     }
 
     #[test]

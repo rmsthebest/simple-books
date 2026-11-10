@@ -347,3 +347,83 @@ fn a_book_with_nothing_in_it_opens() {
     assert!(reader.page().unwrap().is_none());
     assert!(!reader.turn(Turn::Previous).unwrap());
 }
+
+/// A chapter whose second paragraph has a footnote reference, and a chapter
+/// of notes.
+fn footnoted_book(target: Position) -> Vec<u8> {
+    let mut first = vec![heading("One"), paragraph(1, 40)];
+    let mut note = Span::plain("1");
+    note.style.vertical = book_format::Vertical::Super;
+    note.link = Some(target);
+    first.push(Block {
+        kind: BlockKind::Paragraph { indent_first: true },
+        indent: 0,
+        align: Align::Default,
+        spans: vec![Span::plain(prose(2, 12)), note, Span::plain(prose(3, 30))],
+    });
+    let mut notes = vec![heading("Notes")];
+    for seed in 0..40 {
+        notes.push(paragraph(seed + 200, 30));
+    }
+    let chapters = [Chapter { blocks: first }, Chapter { blocks: notes }];
+    let mut out = Cursor::new(Vec::new());
+    book_format::write(
+        &mut out,
+        "Notes".into(),
+        Vec::new(),
+        Some("en".into()),
+        Vec::new(),
+        &chapters,
+        &[],
+    )
+    .unwrap();
+    out.into_inner()
+}
+
+#[test]
+fn a_tapped_footnote_goes_there_and_back() {
+    let target = Position {
+        chapter: 1,
+        block: 30,
+        offset: 0,
+    };
+    let bytes = footnoted_book(target);
+    let settings = Settings::default();
+    let mut reader = Reader::open(open(&bytes), settings.clone(), 1, START, None).unwrap();
+    reader.page().unwrap();
+    let here = reader.current().unwrap();
+
+    // Somewhere on the page, a tap finds the superscript; most places don't.
+    let mut hits = 0;
+    let mut misses = 0;
+    let (width, height) = (
+        u16::try_from(settings.width).unwrap(),
+        u16::try_from(settings.height).unwrap(),
+    );
+    for y in (0..height).step_by(8) {
+        for x in (0..width).step_by(8) {
+            match reader.link_at(f32::from(x), f32::from(y)) {
+                Some(found) => {
+                    assert_eq!(found, target);
+                    hits += 1;
+                }
+                None => misses += 1,
+            }
+        }
+    }
+    assert!(hits > 0, "the link can't be tapped");
+    assert!(misses > hits * 20, "{hits} hits, {misses} misses");
+
+    assert!(!reader.can_go_back());
+    reader.follow(target).unwrap();
+    let there = reader.current().unwrap();
+    assert_eq!(Some(there), reader.page_map().locate(target));
+    assert_ne!(there, here);
+    assert!(reader.can_go_back());
+
+    reader.turn(Turn::Next).unwrap();
+    assert!(reader.back().unwrap());
+    assert_eq!(reader.current(), Some(here));
+    assert!(!reader.back().unwrap());
+    assert_eq!(reader.current(), Some(here));
+}

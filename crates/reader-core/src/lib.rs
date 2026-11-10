@@ -34,7 +34,7 @@ pub use typeset::Typesetter;
 
 /// Bumped whenever a change here would put page breaks somewhere else, so
 /// page maps cached on disk are made again.
-pub const LAYOUT_VERSION: u32 = 3;
+pub const LAYOUT_VERSION: u32 = 4;
 
 /// How pages look. Everything that changes where lines break is in here, and
 /// [`Settings::cache_key`] covers all of it.

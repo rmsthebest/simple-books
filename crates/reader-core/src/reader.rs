@@ -3,6 +3,10 @@
 //!
 //! The last three pages drawn are kept, so after [`Reader::prepare`] the next
 //! and previous pages are both ready. Turning back never lays out again.
+//!
+//! Each drawn page keeps where its links are. [`Reader::link_at`] finds the
+//! one a tap meant, and [`Reader::follow`] remembers where the reader was, so
+//! [`Reader::back`] can return from a footnote.
 
 use std::io::{Read, Seek};
 
@@ -11,13 +15,18 @@ use book_format::{BookReader, Chapter, FormatError, ImageInfo, Manifest, Positio
 use crate::{
     Canvas, PageMap, PageRef, PageStart, Settings, Typesetter,
     paginate::{draw_page, paginate},
-    typeset::ChapterRef,
+    typeset::{ChapterRef, Page},
 };
 
 /// Drawn pages kept: the current one and one each side.
 const PAGES_KEPT: usize = 3;
 /// Chapters kept parsed, for turning across a chapter's end and back.
 const CHAPTERS_KEPT: usize = 2;
+/// A tap this close to a link follows it, in millimetres: a fingertip's
+/// accuracy, and a footnote's superscript number is smaller than that.
+const REACH_MM: f32 = 3.0;
+/// Followed links remembered for [`Reader::back`].
+const HISTORY_KEPT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Turn {
@@ -39,9 +48,11 @@ pub struct Reader<R> {
     /// Most recently used last.
     chapters: Vec<(u32, Chapter)>,
     /// Most recently used last.
-    pages: Vec<(PageRef, Canvas)>,
+    pages: Vec<(PageRef, Page)>,
     /// `None` only when the book has no pages at all.
     current: Option<PageRef>,
+    /// Where each followed link was followed from. Most recent last.
+    history: Vec<Position>,
 }
 
 impl<R> std::fmt::Debug for Reader<R> {
@@ -80,6 +91,7 @@ impl<R: Read + Seek> Reader<R> {
             chapters: Vec::new(),
             pages: Vec::new(),
             current: None,
+            history: Vec::new(),
         };
         reader.go_to(at)?;
         Ok(reader)
@@ -185,6 +197,46 @@ impl<R: Read + Seek> Reader<R> {
         Ok(())
     }
 
+    /// Where the link nearest (`x`, `y`) on the current page goes, if one is
+    /// within reach. The page must have been drawn with [`Self::page`].
+    pub fn link_at(&self, x: f32, y: f32) -> Option<Position> {
+        let current = self.current?;
+        let (_, page) = self.pages.iter().find(|(p, _)| *p == current)?;
+        let reach = REACH_MM / 25.4 * self.typesetter.settings().dpi;
+        page.links
+            .iter()
+            .map(|link| (link.distance(x, y), link.target))
+            .filter(|(distance, _)| *distance <= reach)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, target)| target)
+    }
+
+    /// Goes to a link's target, remembering where the reader was.
+    pub fn follow(&mut self, target: Position) -> Result<(), ReaderError> {
+        if let Some(here) = self.position() {
+            if self.history.len() >= HISTORY_KEPT {
+                self.history.remove(0);
+            }
+            self.history.push(here);
+        }
+        self.go_to(target)
+    }
+
+    /// Returns to where the last followed link was followed from. False if
+    /// there's nowhere to return to.
+    pub fn back(&mut self) -> Result<bool, ReaderError> {
+        let Some(from) = self.history.pop() else {
+            return Ok(false);
+        };
+        self.go_to(from)?;
+        Ok(true)
+    }
+
+    /// Whether [`Self::back`] has somewhere to go.
+    pub fn can_go_back(&self) -> bool {
+        !self.history.is_empty()
+    }
+
     /// Whether a page is drawn already. For tests and timing.
     pub fn is_drawn(&self, page: PageRef) -> bool {
         self.pages.iter().any(|(p, _)| *p == page)
@@ -274,7 +326,7 @@ impl<R: Read + Seek> Reader<R> {
         let at = self.pages.iter().position(|(p, _)| *p == page)?;
         let entry = self.pages.remove(at);
         self.pages.push(entry);
-        self.pages.last().map(|(_, canvas)| canvas)
+        self.pages.last().map(|(_, page)| &page.canvas)
     }
 
     fn draw(&mut self, page: PageRef) -> Result<(), ReaderError> {
@@ -284,10 +336,10 @@ impl<R: Read + Seek> Reader<R> {
         self.paginated(page.chapter)?;
         let index = self.load_chapter(page.chapter)?;
         let settings = self.typesetter.settings();
-        let mut canvas = if self.pages.len() >= PAGES_KEPT {
+        let mut drawn = if self.pages.len() >= PAGES_KEPT {
             self.pages.remove(0).1
         } else {
-            Canvas::new(settings.width, settings.height)
+            Page::new(settings.width, settings.height)
         };
         let Self {
             book,
@@ -305,13 +357,13 @@ impl<R: Read + Seek> Reader<R> {
         let pages = map.pages(page.chapter).unwrap_or_default();
         draw_page(
             typesetter,
-            &mut canvas,
+            &mut drawn,
             at,
             pages,
             page.page as usize,
             &mut |id| decode(book, id),
         );
-        self.pages.push((page, canvas));
+        self.pages.push((page, drawn));
         Ok(())
     }
 }

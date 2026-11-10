@@ -5,10 +5,13 @@
 //! the column. Lines that end at a hyphen are justified to that narrower
 //! width, and the "-" drawn after them ends at the margin. The other lines
 //! are justified to the full column.
+//!
+//! Links are underlined, and where they were drawn is kept so a tap can find
+//! them. Parley carries each run's link target as its brush.
 
 use std::borrow::Cow;
 
-use book_format::{Align, Block, BlockKind, Chapter, ImageInfo, SOFT_HYPHEN, Vertical};
+use book_format::{Align, Block, BlockKind, Chapter, ImageInfo, Position, SOFT_HYPHEN, Vertical};
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontFeatures, FontStyle, FontVariations,
     FontWeight, IndentOptions, Layout, LayoutContext, LineHeight, OverflowWrap,
@@ -23,6 +26,69 @@ use crate::{Canvas, Settings, fonts, knuth_plass, render::Glyphs};
 /// still break after it. Intel One Mono has no glyph for it, so Literata's is
 /// used, widened with letter spacing to a monospace space.
 pub(crate) const CODE_SPACE: char = '\u{2008}';
+
+/// Parley's brush: where a run links to, if anywhere.
+pub(crate) type Link = Option<Position>;
+
+/// Where a link was drawn on a page, for finding what a tap hit. Spans the
+/// height of its line.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct LinkArea {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub target: Position,
+}
+
+impl LinkArea {
+    /// How far (`x`, `y`) is from the area: 0 inside it.
+    pub(crate) fn distance(&self, x: f32, y: f32) -> f32 {
+        let dx = (self.left - x).max(x - self.right).max(0.0);
+        let dy = (self.top - y).max(y - self.bottom).max(0.0);
+        dx.hypot(dy)
+    }
+}
+
+/// A drawn page: its pixels, and where its links are.
+#[derive(Debug, Clone)]
+pub(crate) struct Page {
+    pub canvas: Canvas,
+    pub links: Vec<LinkArea>,
+}
+
+impl Page {
+    pub(crate) fn new(width: u32, height: u32) -> Self {
+        Self {
+            canvas: Canvas::new(width, height),
+            links: Vec::new(),
+        }
+    }
+}
+
+/// A link's run of ink on one line, collected while the line is drawn.
+struct Underline {
+    area: LinkArea,
+    /// The top of the underline, and its thickness.
+    y: f32,
+    thickness: f32,
+}
+
+impl Underline {
+    fn finish(self, page: &mut Page) {
+        let left = self.area.left.round();
+        let width = (self.area.right.round() - left).max(0.0);
+        let thickness = self.thickness.round().max(1.0);
+        page.canvas.underline(
+            left as i32,
+            self.y.round() as i32,
+            width as u32,
+            thickness as u32,
+            thickness as u32,
+        );
+        page.links.push(self.area);
+    }
+}
 
 /// A typographic point in inches.
 const POINT: f32 = 1.0 / 72.0;
@@ -84,10 +150,10 @@ pub(crate) struct ChapterRef<'a> {
 pub struct Typesetter {
     settings: Settings,
     fonts: FontContext,
-    layout_cx: LayoutContext<()>,
-    layout: Layout<()>,
+    layout_cx: LayoutContext<Link>,
+    layout: Layout<Link>,
     /// The list marker or separator being drawn beside a block.
-    aux: Layout<()>,
+    aux: Layout<Link>,
     locale: Option<Language>,
     text: String,
     /// For each line in `layout`, whether it ends at a soft hyphen.
@@ -178,7 +244,7 @@ impl Typesetter {
     /// `image` decodes an image of the book.
     pub(crate) fn draw_lines(
         &mut self,
-        canvas: &mut Canvas,
+        page: &mut Page,
         at: ChapterRef<'_>,
         index: usize,
         lines: std::ops::Range<usize>,
@@ -192,7 +258,7 @@ impl Typesetter {
             let (width, height) = self.image_size(at.images.get(*id as usize));
             if let Some(gray) = image(*id) {
                 let x = left + (self.settings.content_width() - width) / 2.0;
-                crate::render::image(canvas, &gray, x, top, width, height);
+                crate::render::image(&mut page.canvas, &gray, x, top, width, height);
             }
             return;
         }
@@ -212,46 +278,7 @@ impl Typesetter {
         };
         let y0 = top - first.metrics().block_min_coord;
         for line_index in lines.clone() {
-            let Some(line) = self.layout.get(line_index) else {
-                break;
-            };
-            let mut last_run = None;
-            for item in line.items() {
-                if let PositionedLayoutItem::GlyphRun(run) = item {
-                    let font = run.run().font();
-                    let size = run.run().font_size();
-                    let coords: Vec<i16> = run
-                        .run()
-                        .normalized_coords()
-                        .iter()
-                        .map(|c| c.to_bits())
-                        .collect();
-                    for glyph in run.positioned_glyphs() {
-                        self.glyphs.draw(
-                            canvas,
-                            font,
-                            size,
-                            &coords,
-                            glyph.id,
-                            x0 + glyph.x,
-                            y0 + glyph.y,
-                        );
-                    }
-                    last_run = Some((
-                        font.clone(),
-                        size,
-                        coords,
-                        run.offset() + run.advance(),
-                        run.baseline(),
-                    ));
-                }
-            }
-            if self.hyphens.get(line_index) == Some(&true)
-                && let Some((font, size, coords, end, baseline)) = last_run
-            {
-                self.glyphs
-                    .draw_char(canvas, &font, size, &coords, '-', x0 + end, y0 + baseline);
-            }
+            self.draw_line(page, line_index, x0, y0);
         }
 
         // A list marker sits in the gutter before the first line.
@@ -264,7 +291,116 @@ impl Typesetter {
             let gap = self.settings.font_size * 0.5;
             self.lay_out_aux(marker, size);
             let x = x0 - gap - self.aux.width();
-            self.draw_aux(canvas, x, baseline);
+            self.draw_aux(&mut page.canvas, x, baseline);
+        }
+    }
+
+    /// Draws a line of the block in the layout, with the layout's origin at
+    /// (`x0`, `y0`) on the page, and underlines and records its links.
+    fn draw_line(&mut self, page: &mut Page, line_index: usize, x0: f32, y0: f32) {
+        let Some(line) = self.layout.get(line_index) else {
+            return;
+        };
+        let mut last_run = None;
+        let mut underline: Option<Underline> = None;
+        for item in line.items() {
+            if let PositionedLayoutItem::GlyphRun(run) = item {
+                let font = run.run().font();
+                let size = run.run().font_size();
+                let coords: Vec<i16> = run
+                    .run()
+                    .normalized_coords()
+                    .iter()
+                    .map(|c| c.to_bits())
+                    .collect();
+                // From the first inked glyph to the end of the last, so
+                // spaces at either end of a link aren't underlined.
+                let mut ink: Option<(f32, f32)> = None;
+                for glyph in run.positioned_glyphs() {
+                    let x = x0 + glyph.x;
+                    if self.glyphs.draw(
+                        &mut page.canvas,
+                        font,
+                        size,
+                        &coords,
+                        glyph.id,
+                        x,
+                        y0 + glyph.y,
+                    ) {
+                        let (start, end) = ink.get_or_insert((x, x));
+                        *start = start.min(x);
+                        *end = end.max(x + glyph.advance);
+                    }
+                }
+                match (run.style().brush, ink) {
+                    (Some(target), Some((start, end))) => {
+                        let metrics = run.run().font_metrics();
+                        // The offset is up from the baseline; the page's y
+                        // runs down.
+                        let y = y0 + run.baseline() - metrics.underline_offset;
+                        match &mut underline {
+                            Some(u) if u.area.target == target => {
+                                u.area.right = end;
+                                u.y = u.y.max(y);
+                                u.thickness = u.thickness.max(metrics.underline_size);
+                            }
+                            _ => {
+                                if let Some(done) = underline.take() {
+                                    done.finish(page);
+                                }
+                                let m = line.metrics();
+                                underline = Some(Underline {
+                                    area: LinkArea {
+                                        left: start,
+                                        top: y0 + m.block_min_coord,
+                                        right: end,
+                                        bottom: y0 + m.block_max_coord,
+                                        target,
+                                    },
+                                    y,
+                                    thickness: metrics.underline_size,
+                                });
+                            }
+                        }
+                    }
+                    // Only spaces: a link carries on across them.
+                    (Some(_), None) => {}
+                    (None, _) => {
+                        if let Some(done) = underline.take() {
+                            done.finish(page);
+                        }
+                    }
+                }
+                last_run = Some((
+                    font.clone(),
+                    size,
+                    coords,
+                    run.offset() + run.advance(),
+                    run.baseline(),
+                ));
+            }
+        }
+        if self.hyphens.get(line_index) == Some(&true)
+            && let Some((font, size, coords, end, baseline)) = last_run
+        {
+            self.glyphs.draw_char(
+                &mut page.canvas,
+                &font,
+                size,
+                &coords,
+                '-',
+                x0 + end,
+                y0 + baseline,
+            );
+            // A link broken at a hyphen is underlined under it too.
+            if let Some(u) = &mut underline
+                && (u.area.right - (x0 + end)).abs() < 1.0
+            {
+                u.area.right += self.hyphen_em * size;
+            }
+        }
+        if let Some(done) = underline.take() {
+            done.finish(page);
         }
     }
 
@@ -396,6 +532,9 @@ impl Typesetter {
                     StyleProperty::FontFeatures(FontFeatures::Source(Cow::Borrowed("\"smcp\" 1"))),
                     range.clone(),
                 );
+            }
+            if let Some(target) = span.link {
+                builder.push(StyleProperty::Brush(Some(target)), range.clone());
             }
             if st.vertical != Vertical::Baseline {
                 let shift = if st.vertical == Vertical::Super {
@@ -619,7 +758,7 @@ fn mono() -> FontFamily<'static> {
 
 /// Literata's optical size axis is in points, so small text gets sturdier
 /// shapes and headings finer ones, as in print.
-fn optical_size(px: f32, dpi: f32) -> StyleProperty<'static, ()> {
+fn optical_size(px: f32, dpi: f32) -> StyleProperty<'static, Link> {
     let points = px / dpi / POINT;
     StyleProperty::FontVariations(FontVariations::Source(Cow::Owned(format!(
         "\"opsz\" {points:.1}"
@@ -628,7 +767,7 @@ fn optical_size(px: f32, dpi: f32) -> StyleProperty<'static, ()> {
 
 #[cfg(test)]
 mod tests {
-    use book_format::Span;
+    use book_format::{Position, Span};
 
     use super::*;
 
@@ -905,5 +1044,70 @@ mod tests {
                 "line {i} at {start}: {starts:?}"
             );
         }
+    }
+
+    #[test]
+    fn links_are_underlined_where_they_are_drawn() {
+        let target = Position {
+            chapter: 2,
+            block: 5,
+            offset: 0,
+        };
+        let mut link =
+            Span::plain("a linked phrase that runs on long enough to wrap onto the next line ");
+        link.link = Some(target);
+        let chapter = Chapter {
+            blocks: vec![Block {
+                kind: BlockKind::Paragraph {
+                    indent_first: false,
+                },
+                indent: 0,
+                align: Align::Default,
+                spans: vec![
+                    Span::plain("Some words before "),
+                    link,
+                    Span::plain("and some words after it, which aren't."),
+                ],
+            }],
+        };
+        let at = ChapterRef {
+            index: 0,
+            chapter: &chapter,
+            images: &[],
+        };
+        let settings = Settings::default();
+        let mut typesetter = Typesetter::new(settings.clone(), Some("en"));
+        let placed = typesetter.block(at, 0);
+        let mut page = Page::new(settings.width, settings.height);
+        typesetter.draw_lines(&mut page, at, 0, 0..placed.lines.len(), 100.0, &mut |_| {
+            None
+        });
+        let Page { canvas, links } = page;
+        assert_eq!(links.len(), 2, "one area per line: {links:?}");
+        assert!(links.iter().all(|l| l.target == target));
+        assert!(links[0].bottom <= links[1].top + 0.5);
+        for area in &links {
+            // Some row inside the area is mostly dark: the underline, with
+            // gaps at descenders. Text alone never is.
+            let (left, right) = (
+                area.left.ceil() as usize + 1,
+                area.right.floor() as usize - 1,
+            );
+            let width = settings.width as usize;
+            let underlined = (area.top as usize..area.bottom as usize).any(|y| {
+                let row = &canvas.pixels()[y * width + left..y * width + right];
+                row.iter().filter(|p| **p < 128).count() * 10 > row.len() * 8
+            });
+            assert!(underlined, "no underline in {area:?}");
+            assert_eq!(
+                area.distance(f32::midpoint(area.left, area.right), area.top + 1.0),
+                0.0
+            );
+        }
+        // The first line is justified to the margin; the words after the
+        // link carry on the second line past its end, not underlined.
+        let margin = (settings.width - settings.margin_side) as f32;
+        assert!((links[0].right - margin).abs() < 1.0, "{links:?}");
+        assert!(links[1].right < margin - 40.0, "{links:?}");
     }
 }

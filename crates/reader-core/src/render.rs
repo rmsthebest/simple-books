@@ -57,6 +57,7 @@ impl std::fmt::Debug for Glyphs {
 impl Glyphs {
     /// Draws a glyph with its origin at (`x`, `y`) on the page. `coords` are
     /// the font's normalized variation coordinates, as raw `F2Dot14` bits.
+    /// Returns whether the glyph has any ink: false for a space.
     #[allow(clippy::too_many_arguments, reason = "a glyph has this many parts")]
     pub(crate) fn draw(
         &mut self,
@@ -67,7 +68,7 @@ impl Glyphs {
         glyph: u32,
         x: f32,
         y: f32,
-    ) {
+    ) -> bool {
         let mut whole = x.floor();
         let mut subpixel = ((x - whole) * SUBPIXELS).round();
         if subpixel >= SUBPIXELS {
@@ -99,6 +100,7 @@ impl Glyphs {
                 &bitmap.alpha,
             );
         }
+        bitmap.width > 0
     }
 
     /// Draws a character that Parley didn't shape, such as the hyphen at a

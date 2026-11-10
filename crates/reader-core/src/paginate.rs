@@ -11,7 +11,10 @@
 use book_format::{Chapter, ImageInfo, Position};
 use serde::{Deserialize, Serialize};
 
-use crate::{Canvas, Settings, Typesetter, typeset::ChapterRef};
+use crate::{
+    Settings, Typesetter,
+    typeset::{ChapterRef, Page},
+};
 
 /// Where a page starts: a line of a block, and that line's place in the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,16 +229,18 @@ fn choose_break(items: &[Item], start: usize, overflow: usize) -> usize {
     }
 }
 
-/// Draws page `page` of a chapter paginated into `pages`.
+/// Draws page `page` of a chapter paginated into `pages`, and lists where
+/// its links are.
 pub(crate) fn draw_page(
     typesetter: &mut Typesetter,
-    canvas: &mut Canvas,
+    drawn: &mut Page,
     at: ChapterRef<'_>,
     pages: &[PageStart],
     page: usize,
     image: &mut dyn FnMut(u32) -> Option<image::GrayImage>,
 ) {
-    canvas.clear();
+    drawn.canvas.clear();
+    drawn.links.clear();
     let Some(start) = pages.get(page) else {
         return;
     };
@@ -263,7 +268,7 @@ pub(crate) fn draw_page(
             top += placed.space_before;
         }
         first = false;
-        typesetter.draw_lines(canvas, at, block, from..to, top, image);
+        typesetter.draw_lines(drawn, at, block, from..to, top, image);
         top += placed.lines[from..to].iter().map(|l| l.height).sum::<f32>();
     }
 }

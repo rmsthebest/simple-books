@@ -8,8 +8,9 @@
 //! The window is half size unless `--full` is given, since the page is
 //! 1448 pixels tall.
 //!
-//! - Click the left third of the page, or press ←, Page Up or Backspace, to
-//!   go back. Click elsewhere, or press →, Page Down or Space, to go forward.
+//! - Click the left third of the page, or press ← or Page Up, to go back a
+//!   page. Click elsewhere, or press →, Page Down or Space, to go forward.
+//! - Click a link to follow it, and press Backspace to return.
 //! - `+` and `-` change the text size, `H` toggles hyphenation, `J`
 //!   justification and `K` Knuth–Plass line breaking.
 //! - `Q` or Esc quits.
@@ -92,40 +93,23 @@ fn main() {
     let mut was_down = false;
     while window.is_open() && !window.is_key_down(Key::Escape) && !window.is_key_down(Key::Q) {
         let now = Instant::now();
-        let mut turn = None;
-        let mut changed = None;
-        for key in window.get_keys_pressed(KeyRepeat::Yes) {
-            match key {
-                Key::Right | Key::PageDown | Key::Space => turn = Some(Turn::Next),
-                Key::Left | Key::PageUp | Key::Backspace => turn = Some(Turn::Previous),
-                Key::Equal | Key::NumPadPlus => changed = Some(settings.font_size + 4.0),
-                Key::Minus | Key::NumPadMinus => changed = Some(settings.font_size - 4.0),
-                Key::H => {
-                    settings.hyphenate = !settings.hyphenate;
-                    changed = Some(settings.font_size);
-                }
-                Key::J => {
-                    settings.justify = !settings.justify;
-                    changed = Some(settings.font_size);
-                }
-                Key::K => {
-                    settings.optimal_breaks = !settings.optimal_breaks;
-                    changed = Some(settings.font_size);
-                }
-                _ => {}
-            }
-        }
+        let (action, changed) = keys(&window, &mut settings);
         let down = window.get_mouse_down(MouseButton::Left);
-        if down
-            && !was_down
-            && let Some((x, _)) = window.get_mouse_pos(MouseMode::Discard)
-        {
-            turn = Some(if x * (divisor as f32) < settings.width as f32 / 3.0 {
-                Turn::Previous
-            } else {
-                Turn::Next
-            });
-        }
+        let action = if down && !was_down {
+            window
+                .get_mouse_pos(MouseMode::Discard)
+                .map(|(x, y)| {
+                    tap(
+                        &app.reader,
+                        &settings,
+                        x * divisor as f32,
+                        y * divisor as f32,
+                    )
+                })
+                .or(action)
+        } else {
+            action
+        };
         was_down = down;
 
         if let Some(size) = changed {
@@ -137,8 +121,8 @@ fn main() {
                 "text {} px, hyphenation {}, justified {}, Knuth–Plass {}",
                 settings.font_size, settings.hyphenate, settings.justify, settings.optimal_breaks
             );
-        } else if let Some(turn) = turn {
-            app.turn(turn, now);
+        } else if let Some(action) = action {
+            app.act(action, now);
         }
         app.tick(now);
 
@@ -151,6 +135,48 @@ fn main() {
     cache.save(&app.reader);
     if let Some(position) = app.reader.position() {
         println!("left at {position:?}");
+    }
+}
+
+/// What the keys pressed ask for: an action, or the text size to reopen the
+/// book at after a change to `settings`.
+fn keys(window: &Window, settings: &mut Settings) -> (Option<Action>, Option<f32>) {
+    let mut action = None;
+    let mut changed = None;
+    for key in window.get_keys_pressed(KeyRepeat::Yes) {
+        match key {
+            Key::Right | Key::PageDown | Key::Space => action = Some(Action::Turn(Turn::Next)),
+            Key::Left | Key::PageUp => action = Some(Action::Turn(Turn::Previous)),
+            Key::Backspace => action = Some(Action::Back),
+            Key::Equal | Key::NumPadPlus => changed = Some(settings.font_size + 4.0),
+            Key::Minus | Key::NumPadMinus => changed = Some(settings.font_size - 4.0),
+            Key::H => {
+                settings.hyphenate = !settings.hyphenate;
+                changed = Some(settings.font_size);
+            }
+            Key::J => {
+                settings.justify = !settings.justify;
+                changed = Some(settings.font_size);
+            }
+            Key::K => {
+                settings.optimal_breaks = !settings.optimal_breaks;
+                changed = Some(settings.font_size);
+            }
+            _ => {}
+        }
+    }
+    (action, changed)
+}
+
+/// What a tap at (`x`, `y`) on the page does: follows a link if it's on one,
+/// otherwise turns back in the left third and forward elsewhere.
+fn tap(reader: &Reader<Source>, settings: &Settings, x: f32, y: f32) -> Action {
+    if let Some(target) = reader.link_at(x, y) {
+        Action::Follow(target)
+    } else if x < settings.width as f32 / 3.0 {
+        Action::Turn(Turn::Previous)
+    } else {
+        Action::Turn(Turn::Next)
     }
 }
 
@@ -222,6 +248,13 @@ impl Shown<'_> {
 fn rgb(gray: u8) -> u32 {
     let g = u32::from(gray);
     (g << 16) | (g << 8) | g
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Action {
+    Turn(Turn),
+    Follow(Position),
+    Back,
 }
 
 struct Refresh {
@@ -313,12 +346,17 @@ impl App {
         }
     }
 
-    fn turn(&mut self, turn: Turn, now: Instant) {
+    fn act(&mut self, action: Action, now: Instant) {
         if !self.guard.allow(now) {
             self.ignored += 1;
             return;
         }
-        if !matches!(self.reader.turn(turn), Ok(true)) {
+        let moved = match action {
+            Action::Turn(turn) => self.reader.turn(turn),
+            Action::Follow(target) => self.reader.follow(target).map(|()| true),
+            Action::Back => self.reader.back(),
+        };
+        if !matches!(moved, Ok(true)) {
             return;
         }
         let cached = self
@@ -408,6 +446,9 @@ impl App {
                 );
             }
             None => {}
+        }
+        if self.reader.can_go_back() {
+            title += " — Backspace returns";
         }
         if self.ignored > 0 {
             let _ = write!(title, " — {} turns ignored", self.ignored);
