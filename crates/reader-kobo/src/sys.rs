@@ -454,6 +454,27 @@ pub(crate) fn sync() {
     unsafe { libc::sync() }
 }
 
+/// Makes `command` start in a session of its own, so it outlives whoever
+/// started it and gets no signals meant for them.
+pub(crate) fn own_session(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: setsid is async-signal-safe, as calls between fork and exec
+    // must be.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+}
+
+/// Takes an exclusive lock on `file` if no one holds one, without waiting.
+/// It's let go when the file is closed.
+pub(crate) fn try_lock(file: &File) -> bool {
+    // SAFETY: flock on a descriptor this File owns.
+    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+}
+
 /// An ioctl number as the C library takes it: a signed int on musl, the
 /// Kobo build, and an unsigned long on glibc. Its bits are what matter.
 #[allow(

@@ -193,7 +193,7 @@ impl Ssh for KoboSsh {
 /// What it prints goes to a file, not a pipe: a daemon it starts in the
 /// background could hold a pipe open, and reading to the end would wait
 /// for that daemon to exit. It's stopped after [`RUN_LIMIT`].
-fn run(script: &Path, action: &str) -> Result<String, String> {
+pub(crate) fn run(script: &Path, action: &str) -> Result<String, String> {
     static RUNS: AtomicU32 = AtomicU32::new(0);
     let n = RUNS.fetch_add(1, Ordering::Relaxed);
     let out_path =

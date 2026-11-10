@@ -2153,6 +2153,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kobo-plugin"
+version = "0.1.0"
+
+[[package]]
 name = "kobo-ssh"
 version = "0.1.0"
 dependencies = [

@@ -23,7 +23,7 @@ const LINE: f32 = 60.0;
 const SAID: [&str; 2] = [
     "This Kobo is plugged into a computer.",
     "Connect to copy books to or from it over USB. Your place is saved, and Nickel starts \
-     and does the connecting. Simple Books in the Nickelite tab comes back here.",
+     and does the connecting. Unplug it when you're done, and Simple Books comes back.",
 ];
 
 impl Layout {

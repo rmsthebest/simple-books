@@ -128,6 +128,8 @@ struct Fake {
     suspended: u32,
     files: HashMap<String, Vec<u8>>,
     clock: u64,
+    /// Whether switching on starts the reader, if that can change.
+    starts_reader: Option<bool>,
 }
 
 impl Device for Fake {
@@ -164,6 +166,13 @@ impl Device for Fake {
     fn clock(&mut self) -> u64 {
         self.clock += 1;
         self.clock
+    }
+    fn starts_reader(&mut self) -> Option<bool> {
+        self.starts_reader
+    }
+    fn set_starts_reader(&mut self, on: bool) -> Result<String, String> {
+        self.starts_reader = Some(on);
+        Ok(if on { "On." } else { "Off." }.to_owned())
     }
 }
 
@@ -1091,7 +1100,7 @@ fn a_computer_plugged_in_offers_nickel_for_usb() {
     run.device
         .files
         .retain(|name, _| !name.starts_with("position-"));
-    assert_eq!(run.tap(USB_CONNECT.0, USB_CONNECT.1), Flow::Exit);
+    assert_eq!(run.tap(USB_CONNECT.0, USB_CONNECT.1), Flow::Usb);
     assert!(run.device.files.keys().any(|k| k.starts_with("position-")));
 }
 
@@ -1192,4 +1201,44 @@ fn held_on_the_sleep_screen_it_asks_and_cancel_goes_back_to_the_page() {
     run.tap(POWER_CANCEL.0, POWER_CANCEL.1);
     assert_eq!(run.page(), page);
     assert!(!run.session.in_power());
+}
+
+/// From settings: the Kobo screen.
+const SETTINGS_KOBO: (f32, f32) = (536.0, 1376.0);
+const KOBO_START_HERE: (f32, f32) = (536.0, 482.0);
+const KOBO_UNINSTALL: (f32, f32) = (536.0, 878.0);
+const KOBO_BACK: (f32, f32) = (536.0, 1376.0);
+
+#[test]
+fn the_kobo_screen_turns_starting_here_on_and_off() {
+    let device = Fake {
+        starts_reader: Some(false),
+        ..Fake::default()
+    };
+    let mut run = Run::at_home(device);
+    run.tap(HOME_SETTINGS.0, HOME_SETTINGS.1);
+    run.tap(SETTINGS_KOBO.0, SETTINGS_KOBO.1);
+    run.tap(KOBO_START_HERE.0, KOBO_START_HERE.1);
+    assert_eq!(run.device.starts_reader, Some(true));
+    run.tap(KOBO_START_HERE.0, KOBO_START_HERE.1);
+    assert_eq!(run.device.starts_reader, Some(false));
+    run.tap(KOBO_BACK.0, KOBO_BACK.1);
+    run.tap(SETTINGS_DONE.0, SETTINGS_DONE.1);
+    assert!(run.session.at_home());
+}
+
+#[test]
+fn uninstalling_takes_a_second_tap_and_saves_the_place() {
+    let mut run = Run::new();
+    run.tap(FORWARD.0, FORWARD.1);
+    run.tap(MENU.0, MENU.1);
+    run.tap(MENU_HOME.0, MENU_HOME.1);
+    run.tap(HOME_SETTINGS.0, HOME_SETTINGS.1);
+    run.tap(SETTINGS_KOBO.0, SETTINGS_KOBO.1);
+    run.device
+        .files
+        .retain(|name, _| !name.starts_with("position-"));
+    assert_eq!(run.tap(KOBO_UNINSTALL.0, KOBO_UNINSTALL.1), Flow::Continue);
+    assert_eq!(run.tap(KOBO_UNINSTALL.0, KOBO_UNINSTALL.1), Flow::Uninstall);
+    assert!(run.device.files.keys().any(|k| k.starts_with("position-")));
 }

@@ -176,6 +176,8 @@ pub(crate) enum Action {
     Toggle(Toggle),
     /// The sync screen.
     Sync,
+    /// The Kobo screen.
+    Kobo,
     Done,
 }
 
@@ -216,10 +218,11 @@ impl Layout {
             height - BUTTON_HEIGHT - 24.0,
             content,
             BUTTON_HEIGHT,
-            &[1.0, 1.0],
+            &[1.0, 1.0, 1.0],
         );
         buttons.push((bottom[0], Action::Sync, "Sync"));
-        buttons.push((bottom[1], Action::Done, "Done"));
+        buttons.push((bottom[1], Action::Kobo, "Kobo"));
+        buttons.push((bottom[2], Action::Done, "Done"));
         Self { buttons }
     }
 
@@ -422,8 +425,8 @@ mod tests {
     #[test]
     fn nothing_overlaps_and_each_button_is_what_it_shows() {
         let layout = Layout::new(1072, 1448);
-        // Two toggles, Sync and Done.
-        assert_eq!(layout.buttons.len(), 2 * ROWS.len() + 4);
+        // Two toggles, Sync, Kobo and Done.
+        assert_eq!(layout.buttons.len(), 2 * ROWS.len() + 5);
         for (i, (rect, action, _)) in layout.buttons.iter().enumerate() {
             assert!(rect.top > PREVIEW_TOP + PREVIEW_HEIGHT, "{action:?}");
             assert!(

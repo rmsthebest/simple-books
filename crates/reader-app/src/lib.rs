@@ -34,6 +34,7 @@
 mod book;
 mod folder;
 mod home;
+mod kobo_page;
 mod library;
 mod menu;
 mod place;
@@ -172,6 +173,17 @@ pub trait Device {
     fn save(&mut self, name: &str, bytes: &[u8]);
     /// The time, in seconds since 1970, for when books were last opened.
     fn clock(&mut self) -> u64;
+    /// Whether switching the device on starts the reader: `None` where
+    /// that can't change, as in the emulator.
+    fn starts_reader(&mut self) -> Option<bool> {
+        None
+    }
+    /// Makes switching on start the reader, or not. Returns what to say on
+    /// the screen, or why it couldn't.
+    fn set_starts_reader(&mut self, on: bool) -> Result<String, String> {
+        let _ = on;
+        Err("That can't change here.".to_owned())
+    }
 }
 
 /// A book file where the platform keeps books.
@@ -211,6 +223,12 @@ pub enum Flow {
     PowerOff,
     /// Restart the device. The place is saved, and the panel says so.
     Restart,
+    /// Back to Nickel for USB, which the platform leaves again for the
+    /// reader once the computer is unplugged. The place is saved.
+    Usb,
+    /// Back to Nickel for good: the platform uninstalls the reader. The
+    /// place is saved.
+    Uninstall,
 }
 
 /// What the reader has chosen, kept across books and restarts.
@@ -291,6 +309,8 @@ enum Mode {
         layout: usb_page::Layout,
         back: Back,
     },
+    /// From settings: starting when switched on, and uninstalling.
+    Kobo(kobo_page::Layout),
     /// The power button was held: power off, restart or Nickel.
     Power {
         layout: power_page::Layout,
@@ -768,6 +788,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             | Mode::Library(_)
             | Mode::Search(_)
             | Mode::Settings(_)
+            | Mode::Kobo(_)
             | Mode::Sync(_)
             | Mode::Usb { .. }
             | Mode::Reading
@@ -795,6 +816,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let in_library = matches!(self.mode, Mode::Library(_));
         let in_search = matches!(self.mode, Mode::Search(_));
         let in_settings = matches!(self.mode, Mode::Settings(_));
+        let in_kobo = matches!(self.mode, Mode::Kobo(_));
         let in_sync = matches!(self.mode, Mode::Sync(_));
         let in_usb = matches!(self.mode, Mode::Usb { .. });
         let power_until = match self.mode {
@@ -836,12 +858,14 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Event::Turn(turn) if in_library => self.library_page(turn, now, device),
             Event::Tap { x, y } if in_search => self.search_tap(x, y, now, device)?,
             Event::Tap { x, y } if in_settings => self.settings_tap(x, y, now, device),
+            Event::Tap { x, y } if in_kobo => return Ok(self.kobo_tap(x, y, now, device)),
             Event::Tap { x, y } if in_sync => self.sync_tap(x, y, now, device),
             Event::Tap { x, y } if in_usb => return self.usb_tap(x, y, now, device),
             _ if at_home
                 || in_library
                 || in_search
                 || in_settings
+                || in_kobo
                 || in_sync
                 || in_usb
                 || in_menu => {}
@@ -1130,9 +1154,61 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 self.show_settings(device, Refresh::Partial, now);
             }
             Some(settings::Action::Sync) => self.show_sync(device, Refresh::Full, now),
+            Some(settings::Action::Kobo) => {
+                let state = kobo_page::State {
+                    starts_here: device.starts_reader(),
+                    ..kobo_page::State::default()
+                };
+                self.show_kobo(state, device, Refresh::Full, now);
+            }
             Some(settings::Action::Done) => self.go_home(device, Refresh::Full, now),
             None => {}
         }
+    }
+
+    fn show_kobo(
+        &mut self,
+        state: kobo_page::State,
+        device: &mut dyn Device,
+        refresh: Refresh,
+        now: Instant,
+    ) {
+        let settings = Settings::default();
+        let layout = kobo_page::Layout::new(settings.width, settings.height, state);
+        let battery = battery_text(device);
+        layout.draw(&mut self.screen, &mut self.ui, &battery);
+        device.show(&self.screen, refresh);
+        self.guard.refreshing(now + refresh.duration());
+        self.mode = Mode::Kobo(layout);
+    }
+
+    fn kobo_tap(&mut self, x: f32, y: f32, now: Instant, device: &mut dyn Device) -> Flow {
+        let Mode::Kobo(layout) = &self.mode else {
+            return Flow::Continue;
+        };
+        let mut state = layout.state.clone();
+        match layout.hit(x, y) {
+            Some(kobo_page::Action::StartHere) => {
+                let on = state.starts_here != Some(true);
+                state.said = Some(match device.set_starts_reader(on) {
+                    Ok(said) | Err(said) => said,
+                });
+                state.starts_here = device.starts_reader();
+                state.confirming = false;
+            }
+            Some(kobo_page::Action::Uninstall) if state.confirming => {
+                self.save(device);
+                return Flow::Uninstall;
+            }
+            Some(kobo_page::Action::Uninstall) => state.confirming = true,
+            Some(kobo_page::Action::Back) => {
+                self.show_settings(device, Refresh::Full, now);
+                return Flow::Continue;
+            }
+            None => return Flow::Continue,
+        }
+        self.show_kobo(state, device, Refresh::Partial, now);
+        Flow::Continue
     }
 
     /// Saves a changed setting, and passes on what the device or the guard
@@ -1297,6 +1373,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             | Mode::Library(_)
             | Mode::Search(_)
             | Mode::Settings(_)
+            | Mode::Kobo(_)
             | Mode::Sync(_)
             | Mode::Usb { .. }
             | Mode::Reading
@@ -1316,7 +1393,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Mode::Home(_) => Back::Home,
             Mode::Library(layout) => Back::Library(layout.page()),
             Mode::Search(layout) => Back::Search(layout.query().to_owned(), layout.library_page()),
-            Mode::Settings(_) => Back::Settings,
+            Mode::Settings(_) | Mode::Kobo(_) => Back::Settings,
             Mode::Sync(_) => Back::Sync,
             Mode::Usb { back, .. } | Mode::Power { back, .. } | Mode::Asleep { back, .. } => {
                 back.clone()
@@ -1400,7 +1477,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         match layout.hit(x, y) {
             Some(usb_page::Action::Connect) => {
                 self.save(device);
-                Ok(Flow::Exit)
+                Ok(Flow::Usb)
             }
             Some(usb_page::Action::NotNow) => {
                 self.usb_declined = true;

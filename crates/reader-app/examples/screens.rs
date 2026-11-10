@@ -31,6 +31,7 @@ struct Recorder {
     name: &'static str,
     files: HashMap<String, Vec<u8>>,
     clock: u64,
+    starts_reader: bool,
 }
 
 impl Device for Recorder {
@@ -67,6 +68,13 @@ impl Device for Recorder {
     fn clock(&mut self) -> u64 {
         self.clock += 60;
         self.clock
+    }
+    fn starts_reader(&mut self) -> Option<bool> {
+        Some(self.starts_reader)
+    }
+    fn set_starts_reader(&mut self, on: bool) -> Result<String, String> {
+        self.starts_reader = on;
+        Ok("Simple Books will start when the Kobo is switched on.".to_owned())
     }
 }
 
@@ -108,6 +116,7 @@ fn main() {
         name: "home-new",
         files: HashMap::new(),
         clock: 1_700_000_000,
+        starts_reader: false,
     };
     let now = Instant::now();
     let session = Session::start(Arc::new(folder), &mut device, now).unwrap();
@@ -131,6 +140,11 @@ fn main() {
     run.tap("settings-spacing", 967.0, 590.0);
     println!("settings-spacing: drawn in {:?}", started.elapsed());
     sync_screens(&mut run);
+    // The Kobo screen, starting here turned on, then back.
+    run.tap("kobo", 536.0, 1376.0);
+    run.tap("kobo-on", 536.0, 482.0);
+    run.tap("kobo-uninstall", 536.0, 878.0);
+    run.tap("settings-back", 536.0, 1376.0);
     run.tap("home", 776.0, 1376.0);
     run.tap("library", 194.0, 1376.0);
     run.tap("library-series", 656.0, 172.0);

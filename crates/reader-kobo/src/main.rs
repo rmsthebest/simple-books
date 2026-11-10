@@ -45,6 +45,7 @@
 #![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
 mod device;
+mod in_nickel;
 mod input;
 mod online;
 mod sys;
@@ -134,6 +135,14 @@ fn main() {
         .map_or_else(|| PathBuf::from(APP_DIR), PathBuf::from);
     open_log(&dir);
     std::panic::set_hook(Box::new(|info| log!("panic: {info}")));
+    if let Some(nickel) = args
+        .iter()
+        .position(|a| a == "--in-nickel")
+        .and_then(|at| args.get(at + 1))
+    {
+        in_nickel::run(&dir, nickel);
+        return;
+    }
     let boot = args.iter().any(|a| a == "--boot");
     log!("starting{}", if boot { " at boot" } else { "" });
     match run(&dir, boot) {
@@ -145,12 +154,30 @@ fn main() {
             log!("restarting");
             std::process::exit(EXIT_RESTART);
         }
+        Ok(Flow::Usb) => {
+            // in-nickel brings the reader back once it's unplugged.
+            request(&dir, in_nickel::USB_RETURN);
+            log!("back to Nickel for USB");
+        }
+        Ok(Flow::Uninstall) => {
+            // in-nickel does it, once Nickel has started.
+            request(&dir, in_nickel::UNINSTALL);
+            log!("back to Nickel, to uninstall");
+        }
         Ok(Flow::Continue | Flow::Exit) => log!("back to Nickel"),
         Err(error) => {
             log!("stopping: {error}");
             std::process::exit(1);
         }
     }
+}
+
+/// Leaves a request for `reader-kobo --in-nickel`, in the app folder.
+fn request(dir: &Path, name: &str) {
+    if let Err(error) = fs::write(dir.join(name), "") {
+        log!("asking for {name}: {error}");
+    }
+    sys::sync();
 }
 
 fn open_log(dir: &Path) {

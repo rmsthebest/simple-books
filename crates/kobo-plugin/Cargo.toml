@@ -1,0 +1,16 @@
+[package]
+name = "kobo-plugin"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "libsimplebooks.so: a Qt image-format plugin in name only, so Nickel loads it and it can start the simple-books helper beside Nickel, as root."
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "simplebooks"
+crate-type = ["cdylib"]

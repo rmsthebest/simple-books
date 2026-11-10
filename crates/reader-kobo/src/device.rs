@@ -13,9 +13,14 @@ use reader_app::{Battery, Device, Light, Refresh};
 use reader_core::Canvas;
 
 use crate::{
-    log,
+    log, online,
     sys::{self, Framebuffer, Waveform},
 };
+
+/// Where `boot-install.sh` adds its line.
+const RC_LOCAL: &str = "/etc/rc.local";
+/// How that line ends.
+const BOOT_MARK: &str = "# simple-books";
 
 const BATTERY: &str = "/sys/class/power_supply/battery/capacity";
 const CHARGER: &str = "/sys/class/power_supply/ac/online";
@@ -139,6 +144,30 @@ impl Device for Kobo {
         std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .map_or(0, |since| since.as_secs())
+    }
+
+    /// On when `boot` is in the app folder and `/etc/rc.local` runs
+    /// `boot.sh`, as `boot-install.sh on` leaves it.
+    fn starts_reader(&mut self) -> Option<bool> {
+        let line = std::fs::read_to_string(RC_LOCAL)
+            .is_ok_and(|rc| rc.lines().any(|l| l.ends_with(BOOT_MARK)));
+        Some(line && self.dir.join("boot").exists())
+    }
+
+    fn set_starts_reader(&mut self, on: bool) -> Result<String, String> {
+        let script = self.dir.join("boot-install.sh");
+        let result = online::run(&script, if on { "on" } else { "off" });
+        let one_line = |said: String| said.lines().collect::<Vec<_>>().join(" ");
+        match result {
+            Ok(said) => {
+                log!("boot-install.sh: {}", one_line(said.clone()));
+                Ok(one_line(said))
+            }
+            Err(said) => {
+                log!("boot-install.sh failed: {}", one_line(said.clone()));
+                Err(one_line(said))
+            }
+        }
     }
 
     fn save(&mut self, name: &str, bytes: &[u8]) {

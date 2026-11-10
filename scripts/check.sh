@@ -29,6 +29,11 @@ cargo clippy -p reader-kobo --target armv7-unknown-linux-musleabihf -- -D warnin
 step "clippy (Kobo SSH server)"
 cargo clippy -p kobo-ssh --target armv7-unknown-linux-musleabihf -- -D warnings
 
+step "Nickel plugin builds and loads"
+CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_RUSTFLAGS="-C target-feature=-crt-static -C panic=abort" \
+    cargo clippy -p kobo-plugin --target armv7-unknown-linux-musleabihf --target-dir target/kobo-plugin -- -D warnings
+sh scripts/build-kobo-plugin.sh >/dev/null
+
 step "launch scripts parse"
 sh -n kobo/reader.sh
 sh -n kobo/ssh.sh
@@ -39,6 +44,7 @@ sh -n kobo/power.sh
 sh -n scripts/test-boot-install.sh
 sh scripts/test-boot-install.sh
 sh -n scripts/kobo-deploy.sh
+sh -n scripts/build-kobo-plugin.sh
 
 step "sqlx cache is current"
 scripts/sqlx-prepare.sh --check
