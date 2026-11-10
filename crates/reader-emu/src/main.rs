@@ -1,7 +1,7 @@
 //! The reader in a desktop window, shaped and timed like the Clara BW.
 //!
 //! ```sh
-//! cargo run --release -p reader-emu -- [books-folder | book.epub | book.book]... [--full]
+//! cargo run --release -p reader-emu -- [books-folder | book.epub | book.book]... [--full] [--server URL]
 //! ```
 //!
 //! Starts on the home screen, with the books in the given folder. EPUBs
@@ -9,6 +9,22 @@
 //! are added to the emulator's own folder, `books/` in its cache directory,
 //! which is used when no folder is given. The window is half size unless
 //! `--full` is given, since the page is 1448 pixels tall.
+//!
+//! `--server URL` syncs with a simple-books server, such as one run locally
+//! at `http://localhost:3000`, as the Kobo would: Settings, then Sync, then
+//! Pair. Synced books go in the emulator's own folder, so no folder can be
+//! given with it. The pairing stays in the cache directory, and the network
+//! is always up. To try it against a server of its own:
+//!
+//! ```sh
+//! cargo leptos build
+//! PUBLIC_URL=http://localhost:3000 DATA_DIR=/tmp/simple-books-data target/debug/simple-books
+//! ```
+//!
+//! Open the setup link it prints, make an account and add a book. Use
+//! `localhost` rather than an IP address, since the sign-in cookie needs a
+//! secure origin. Then run the emulator with `--server http://localhost:3000`,
+//! tap Pair and type the code at `localhost:3000/device`.
 //!
 //! It runs the same [`Session`] as the Kobo, with the mouse as the finger:
 //!
@@ -40,21 +56,66 @@ use std::{
 
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
 use reader_app::{
-    Battery, Device, Event, Flow, Folder, Light, Preferences, Refresh, Session, Turn,
+    AlwaysOnline, Battery, Device, Event, Flow, Folder, Light, Preferences, Refresh, Session,
+    SyncSetup, Turn,
 };
 use reader_core::{Canvas, Settings};
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        eprintln!("usage: reader-emu [books-folder | book.epub | book.book]... [--full]");
-        std::process::exit(2);
+const USAGE: &str =
+    "usage: reader-emu [books-folder | book.epub | book.book]... [--full] [--server URL]";
+
+/// What the command line asks for.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Args {
+    paths: Vec<PathBuf>,
+    full: bool,
+    server: Option<String>,
+}
+
+impl Args {
+    fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
+        let mut parsed = Self::default();
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--help" | "-h" => return Err(USAGE.to_owned()),
+                "--full" => parsed.full = true,
+                "--server" => {
+                    let url = args.next().ok_or("--server needs the server's address")?;
+                    parsed.server = Some(server_url(&url)?);
+                }
+                _ if arg.starts_with("--server=") => {
+                    parsed.server = Some(server_url(&arg["--server=".len()..])?);
+                }
+                _ if arg.starts_with("--") => return Err(format!("unknown option {arg}\n{USAGE}")),
+                _ => parsed.paths.push(PathBuf::from(arg)),
+            }
+        }
+        Ok(parsed)
     }
-    let divisor = if args.iter().any(|a| a == "--full") {
-        1
-    } else {
-        2
-    };
+}
+
+/// The server's address, without a trailing slash.
+fn server_url(url: &str) -> Result<String, String> {
+    let url = url.trim().trim_end_matches('/');
+    let host = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .ok_or_else(|| format!("{url}: expected http:// or https://"))?;
+    if host.is_empty() || host.contains('/') {
+        return Err(format!(
+            "{url}: expected just the server, like http://localhost:3000"
+        ));
+    }
+    Ok(url.to_owned())
+}
+
+fn main() {
+    let args = Args::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(2);
+    });
+    let divisor = if args.full { 1 } else { 2 };
 
     let settings = Settings::default();
     let mut panel = Panel::new(settings.width, settings.height);
@@ -62,16 +123,10 @@ fn main() {
         eprintln!("no cache directory: set XDG_CACHE_HOME or HOME");
         std::process::exit(1);
     };
-    let mut folder = own.clone();
-    for arg in args.iter().filter(|a| !a.starts_with("--")) {
-        let path = PathBuf::from(arg);
-        if path.is_dir() {
-            folder = path;
-        } else if let Err(error) = add(&path, &own) {
-            eprintln!("{}: {error}", path.display());
-            std::process::exit(1);
-        }
-    }
+    let folder = books_folder(&args.paths, &own, args.server.is_some()).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(1);
+    });
     println!("books in {}", folder.display());
 
     let started = Instant::now();
@@ -81,6 +136,16 @@ fn main() {
         std::process::exit(1);
     });
     println!("home in {:?}", started.elapsed());
+    if let (Some(server), Some(dir)) = (args.server, panel.dir.clone()) {
+        println!("syncing with {server}: Settings, then Sync");
+        let setup = SyncSetup {
+            dir,
+            server: Some(server),
+            name: "Emulator".to_owned(),
+            network: Arc::new(AlwaysOnline),
+        };
+        session.enable_sync(setup, &mut panel, Instant::now());
+    }
 
     let (width, height) = (
         settings.width as usize / divisor,
@@ -219,6 +284,27 @@ fn title(session: &Session<File>) -> String {
         let _ = write!(title, " — {ignored} turns ignored");
     }
     title
+}
+
+/// The folder of books to show: the one given, or else `own`, after adding
+/// the books given to `own`. A folder can't be given when syncing, which keeps
+/// books in `own`.
+fn books_folder(paths: &[PathBuf], own: &Path, syncing: bool) -> Result<PathBuf, String> {
+    let mut folder = own.to_owned();
+    for path in paths {
+        if !path.is_dir() {
+            add(path, own).map_err(|error| format!("{}: {error}", path.display()))?;
+        } else if syncing {
+            return Err(format!(
+                "{}: with --server, books are kept in {}, so leave out the folder",
+                path.display(),
+                own.display()
+            ));
+        } else {
+            folder.clone_from(path);
+        }
+    }
+    Ok(folder)
 }
 
 /// Adds an EPUB, converted, or a converted book to the folder `books`, as
@@ -380,4 +466,37 @@ impl Shown<'_> {
 fn rgb(gray: u8) -> u32 {
     let g = u32::from(gray);
     (g << 16) | (g << 8) | g
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Args, String> {
+        Args::parse(args.iter().map(|&a| a.to_owned()))
+    }
+
+    #[test]
+    fn the_command_line_reads() {
+        assert_eq!(parse(&[]).unwrap(), Args::default());
+        let args = parse(&["books", "--full", "--server", "http://localhost:3000/"]).unwrap();
+        assert_eq!(args.paths, [PathBuf::from("books")]);
+        assert!(args.full);
+        assert_eq!(args.server.as_deref(), Some("http://localhost:3000"));
+        assert_eq!(
+            parse(&["--server=https://books.example.com"])
+                .unwrap()
+                .server
+                .as_deref(),
+            Some("https://books.example.com")
+        );
+        for bad in [
+            &["--server"][..],
+            &["--server", "localhost:3000"],
+            &["--server", "https://books.example.com/kobo/x"],
+            &["--fast"],
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
+    }
 }
