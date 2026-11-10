@@ -18,7 +18,9 @@ use simple_books::server::{
     http::limit::Limits,
     kobo::resources::Resources,
     library::upload::UploadGate,
-    now, router,
+    now,
+    reader::install::KoboFiles,
+    router,
     storage::{files::create_private_dir, layout::Layout, reconcile},
 };
 use tokio::{
@@ -204,6 +206,7 @@ async fn serve(config: Config) -> Result<(), AnyError> {
         Some(client_id) => Some(Arc::new(Hardcover::new(&config.hardcover_api, client_id)?)),
         None => None,
     };
+    let kobo_files = config.kobo_files.clone();
     let state = AppState {
         config: Arc::new(config),
         db,
@@ -215,6 +218,7 @@ async fn serve(config: Config) -> Result<(), AnyError> {
         limits: Arc::new(Limits::default()),
         hardcover,
         first_run,
+        kobo_files: Arc::new(KoboFiles::new(kobo_files)),
     };
     tokio::spawn(convert::run(state.clone(), tools));
     if let Some(hardcover) = state.hardcover.clone() {

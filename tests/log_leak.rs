@@ -11,6 +11,7 @@ use std::{
 use axum::http::Method;
 use common::TestServer;
 use serde_json::json;
+use simple_books::server::db::scope::UserScope;
 
 #[derive(Clone, Default)]
 struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -26,6 +27,23 @@ impl Write for Capture {
     }
 }
 
+/// Installs a Kobo as the device page does, returning its secret.
+async fn install_from_website(server: &TestServer, scope: &UserScope) -> String {
+    let cookie = server.cookie(scope).await;
+    let installed = server
+        .request(
+            Method::POST,
+            "/device/kobo-install",
+            &[("cookie", &cookie), ("sec-fetch-site", "same-origin")],
+            Vec::new(),
+        )
+        .await
+        .json();
+    installed["secret"].as_str().unwrap().to_owned()
+}
+
+// One run through every way a secret comes in, so one log to search.
+#[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn tokens_never_reach_the_logs() {
     let capture = Capture::default();
@@ -105,7 +123,17 @@ async fn tokens_never_reach_the_logs() {
             .await;
     }
 
+    let installed = install_from_website(&server, &scope).await;
+
     let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        logs.contains("installed from the website"),
+        "the install should be logged"
+    );
+    assert!(
+        !logs.contains(&installed),
+        "an installed reader's secret reached the logs"
+    );
     assert!(
         logs.contains("kobo_trace"),
         "tracing should be on for this test to mean anything"

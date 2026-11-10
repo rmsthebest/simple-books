@@ -34,7 +34,9 @@ for script in reader.sh wifi.sh boot.sh boot-install.sh power.sh; do
 done
 chmod 755 "${app}/reader-kobo" "${app}/simple-books-ssh" "${app}/reader.sh" "${app}/wifi.sh" \
     "${app}/boot.sh" "${app}/boot-install.sh" "${app}/power.sh"
-git describe --always --dirty >"${app}/version" 2>/dev/null || echo unknown >"${app}/version"
+# The commit, or without git (as in the image's build) the server's version.
+git describe --always --dirty >"${app}/version" 2>/dev/null ||
+    sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1 >"${app}/version"
 
 cp "${plugin}" "${stage}/imageformats/libsimplebooks.so"
 chmod 755 "${stage}/imageformats/libsimplebooks.so"

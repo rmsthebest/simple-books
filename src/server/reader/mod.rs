@@ -4,6 +4,7 @@
 //! path or a log.
 
 pub mod books;
+pub mod install;
 pub mod pair;
 
 use std::fmt;

@@ -2153,6 +2153,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kobo-files"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "kobo-plugin"
 version = "0.1.0"
 
@@ -4318,6 +4325,7 @@ dependencies = [
  "image",
  "js-sys",
  "kobo-conf",
+ "kobo-files",
  "landlock",
  "leptos",
  "leptos_axum",

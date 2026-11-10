@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/book-convert", "crates/book-format", "crates/epub", "crates/kobo-conf", "crates/kobo-plugin", "crates/kobo-ssh", "crates/reader-app", "crates/reader-core", "crates/reader-emu", "crates/reader-kobo", "crates/reader-sync", "crates/sync-proto"]
+members = [".", "crates/book-convert", "crates/book-format", "crates/epub", "crates/kobo-conf", "crates/kobo-files", "crates/kobo-plugin", "crates/kobo-ssh", "crates/reader-app", "crates/reader-core", "crates/reader-emu", "crates/reader-kobo", "crates/reader-sync", "crates/sync-proto"]
 resolver = "3"
 
 [workspace.package]
@@ -57,6 +57,8 @@ serde = { version = "1", features = ["derive"] }
 console_error_panic_hook = { version = "0.1", optional = true }
 js-sys = { version = "0.3", optional = true }
 kobo-conf = { path = "crates/kobo-conf", optional = true }
+# Both: the server writes the Kobo files' tar, the installer reads it.
+kobo-files = { path = "crates/kobo-files", optional = true }
 serde_json = { version = "1", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
@@ -128,6 +130,10 @@ name = "reader_client"
 required-features = ["ssr"]
 
 [[test]]
+name = "kobo_install"
+required-features = ["ssr"]
+
+[[test]]
 name = "reader_app"
 required-features = ["ssr"]
 
@@ -138,6 +144,7 @@ hydrate = [
     "dep:console_error_panic_hook",
     "dep:js-sys",
     "dep:kobo-conf",
+    "dep:kobo-files",
     "dep:serde_json",
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",
@@ -157,6 +164,7 @@ ssr = [
     "dep:epub",
     "dep:hex",
     "dep:image",
+    "dep:kobo-files",
     "dep:landlock",
     "dep:leptos_axum",
     "dep:rand",

@@ -1,0 +1,15 @@
+[package]
+name = "kobo-files"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The tar of Simple Books' Kobo files, as the server writes it and the website's installer reads it"
+publish = false
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+proptest = "1"

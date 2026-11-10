@@ -40,6 +40,8 @@ pub struct AppState {
     pub hardcover: Option<Arc<hardcover::Hardcover>>,
     /// The link that makes the first admin, while there are no users.
     pub first_run: Arc<auth::first_run::FirstRun>,
+    /// What the website's installer puts on a Kobo.
+    pub kobo_files: Arc<reader::install::KoboFiles>,
 }
 
 impl FromRef<AppState> for LeptosOptions {

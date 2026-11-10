@@ -2,9 +2,9 @@
 //! the answer to the form is the page itself, never a redirect with it in the URL.
 
 use axum::{
-    Form,
+    Form, Json,
     extract::{Path, State},
-    http::request::Parts,
+    http::{StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
 };
 
@@ -15,7 +15,10 @@ use crate::server::{
     AppState,
     auth::{device, session::CurrentUser},
     error::AppError,
-    reader::pair::{self, Entered},
+    reader::{
+        install,
+        pair::{self, Entered},
+    },
 };
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +55,42 @@ pub async fn connect(
         Revealed::KoboEndpoint(endpoint),
     )
     .await)
+}
+
+/// `GET /device/kobo-files`: what the installer writes onto a Kobo, as a
+/// tar. See `server::reader::install`.
+pub async fn kobo_files(
+    _user: CurrentUser,
+    State(state): State<AppState>,
+) -> Result<Response, AppError> {
+    let Some(tar) = state.kobo_files.tar().await? else {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            "This server has no Kobo files to install: build them with \
+             scripts/build-kobo-files.sh and point KOBO_FILES at them.",
+        )
+            .into_response());
+    };
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/x-tar"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        tar,
+    )
+        .into_response())
+}
+
+/// `POST /device/kobo-install`: pairs the Kobo the installer just wrote
+/// to. The answer has its secret, so it's JSON for the installer and
+/// never stored by the browser.
+pub async fn kobo_install(
+    user: CurrentUser,
+    State(state): State<AppState>,
+) -> Result<Response, AppError> {
+    let installed = install::install(&state.db, &state.config.public_url, user.id).await?;
+    tracing::info!(user = user.id, "a Kobo was installed from the website");
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(installed)).into_response())
 }
 
 /// `POST /device/{id}/reconnect`

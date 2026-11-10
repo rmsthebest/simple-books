@@ -29,16 +29,32 @@ COPY . .
 ENV SQLX_OFFLINE=true
 RUN cargo leptos build --release
 
+# What the website's installer puts on a Kobo: the reader, its SSH server and
+# the Nickel plugin, for 32-bit ARM. clang builds ring's C, llvm strips, and
+# binutils checks the plugin.
+FROM docker.io/library/rust:1.99.1-slim-trixie@sha256:e97df055c54a05160e7c67ba3b2963de6ddb95903911baf8922dbcd1b394f698 AS kobo
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends binutils clang llvm \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add armv7-unknown-linux-musleabihf
+
+WORKDIR /src
+COPY . .
+RUN KOBO_FILES=/kobo-files sh scripts/build-kobo-files.sh
+
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:436f1724f7a1a91438dbb5a7df2d5ca343d79491ee558355fd7b32552463a9d9
 
 COPY --from=build /src/target/release/simple-books /app/simple-books
 COPY --from=build /src/target/site /app/site
 COPY --from=build /usr/local/bin/kepubify /app/kepubify
+COPY --from=kobo /kobo-files /app/kobo-files
 
 ENV SITE_ROOT=/app/site
 ENV DATA_DIR=/data
 ENV LISTEN_ADDR=0.0.0.0:3000
 ENV KEPUBIFY_PATH=/app/kepubify
+ENV KOBO_FILES=/app/kobo-files
 
 EXPOSE 3000
 VOLUME /data

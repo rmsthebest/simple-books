@@ -18,6 +18,7 @@ use simple_books::server::{
     hardcover::Hardcover,
     http::limit::Limits,
     kobo::resources::Resources,
+    reader::install::KoboFiles,
     router,
     storage::layout::Layout,
     testkit::{self as dev, DevImport},
@@ -110,6 +111,7 @@ impl TestServer {
             limits: Arc::new(Limits::default()),
             hardcover,
             first_run: Arc::default(),
+            kobo_files: Arc::new(KoboFiles::new(dir.path().join("kobo-files"))),
         };
 
         let epub = dir.path().join("book.epub");

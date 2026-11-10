@@ -139,6 +139,28 @@ impl Db {
         Ok(pairing.name)
     }
 
+    /// Adds a reader that already has its secret, as one installed from
+    /// the website does.
+    pub async fn add_reader_device(
+        &self,
+        user_id: i64,
+        name: &str,
+        secret_hash: &str,
+        at: i64,
+    ) -> Result<i64, sqlx::Error> {
+        let row = sqlx::query!(
+            r#"INSERT INTO devices (user_id, name, secret_hash, kind, created_at)
+               VALUES (?1, ?2, ?3, 'reader', ?4) RETURNING id AS "id!""#,
+            user_id,
+            name,
+            secret_hash,
+            at
+        )
+        .fetch_one(&self.write)
+        .await?;
+        Ok(row.id)
+    }
+
     pub async fn reader_device_by_token_hash(
         &self,
         hash: &str,

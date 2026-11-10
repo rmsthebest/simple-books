@@ -38,6 +38,9 @@ pub struct Config {
     pub log_level: String,
     pub data_dir: PathBuf,
     pub site_root: String,
+    /// What the website's installer puts on a Kobo, as
+    /// `scripts/build-kobo-files.sh` lays it out.
+    pub kobo_files: PathBuf,
     pub listen_addr: SocketAddr,
     /// Logs redacted Kobo request and response details, for protocol debugging.
     pub kobo_trace: bool,
@@ -143,6 +146,8 @@ impl Config {
             log_level,
             data_dir: get("DATA_DIR").map_or_else(|| PathBuf::from("data"), PathBuf::from),
             site_root: get("SITE_ROOT").unwrap_or_else(|| "target/site".to_owned()),
+            kobo_files: get("KOBO_FILES")
+                .map_or_else(|| PathBuf::from("target/kobo-files"), PathBuf::from),
             listen_addr,
             kobo_trace,
             hardcover_client_id,
