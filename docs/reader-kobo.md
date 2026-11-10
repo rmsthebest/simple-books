@@ -95,6 +95,11 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   ones go, and where you are in each book goes up. A newer place from another reader is
   used next time you open the book, unless you're reading it. **Unpair**, tapped twice,
   stops syncing and leaves the books on the reader.
+- **USB:** plugged into a computer, the reader offers **Connect**, which saves your place
+  and leaves for Nickel. Nickel then offers to connect, as it always does, and **Simple
+  Books** in the Nickelite tab comes back afterwards. **Not now** goes back to where you
+  were, and it doesn't ask again until the cable is plugged in again. A charger doesn't
+  count. Plugged in while asleep, it asks on waking.
 - **Leave** with **Exit to Nickel** in the menu, or by holding the power button for 3
   seconds.
 - **Sleep** with a short press of the power button, or by leaving it alone for 10

@@ -1,5 +1,5 @@
 //! The system calls with no safe wrapper in `std`: mapping the framebuffer,
-//! the hwtcon and evdev ioctls, and `poll`. Everything `unsafe` in this
+//! the hwtcon and evdev ioctls, the kernel's device events, and `poll`. Everything `unsafe` in this
 //! crate is here.
 //!
 //! The hwtcon definitions are from FBInk's `eink/mtk-kobo.h`, as recorded in
@@ -9,7 +9,7 @@
 use std::{
     fs::{File, OpenOptions},
     io::{self, Write},
-    os::fd::{AsRawFd, BorrowedFd},
+    os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
     time::Duration,
 };
 
@@ -385,6 +385,40 @@ pub(crate) fn key_down(device: &File, code: u16) -> io::Result<bool> {
     Ok(keys
         .get(code / 8)
         .is_some_and(|byte| byte & (1 << (code % 8)) != 0))
+}
+
+/// A socket that's readable whenever the kernel reports a device change,
+/// such as a USB cable going in: the uevents udev hears, for the reader to
+/// look at sysfs again. Non-blocking; read it empty each time.
+pub(crate) fn uevents() -> io::Result<File> {
+    // SAFETY: plain socket creation; the result is checked before use.
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_NETLINK,
+            libc::SOCK_DGRAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            libc::NETLINK_KOBJECT_UEVENT,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `fd` is a new socket that nothing else owns.
+    let socket = unsafe { OwnedFd::from_raw_fd(fd) };
+    // SAFETY: an all-zero sockaddr_nl is valid; the fields that matter are
+    // set below.
+    let mut address: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
+    address.nl_family = libc::AF_NETLINK as libc::sa_family_t;
+    // The kernel's uevent group.
+    address.nl_groups = 1;
+    // SAFETY: `address` is a sockaddr_nl, and the length says so.
+    check(unsafe {
+        libc::bind(
+            socket.as_raw_fd(),
+            std::ptr::from_ref(&address).cast(),
+            size_of::<libc::sockaddr_nl>() as libc::socklen_t,
+        )
+    })?;
+    Ok(File::from(socket))
 }
 
 /// Waits until one of `files` can be read, or `timeout` passes. Returns

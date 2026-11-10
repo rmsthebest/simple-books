@@ -35,6 +35,8 @@
 //!   in the app folder. Wi-Fi is on only while a sync, a pairing or SSH
 //!   needs it, through `wifi.sh` (see [`online`]). It syncs at start, on
 //!   Sync now, and on waking every half hour.
+//! - **USB:** plugged into a computer, as the kernel's device events and
+//!   `extcon` tell it, it offers to leave for Nickel, which does USB.
 #![deny(unsafe_code)]
 #![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
@@ -65,6 +67,9 @@ const APP_DIR: &str = "/mnt/onboard/.adds/simple-books";
 const TOUCH: &str = "/dev/input/event1";
 const POWER: &str = "/dev/input/event2";
 const COVER: &str = "/dev/input/event0";
+/// Which USB cable is in: `SDP=1` or `CDP=1` is a computer, `DCP=1` a
+/// charger. Nickel offers to connect for the first two.
+const EXTCON: &str = "/sys/class/extcon/extcon0/state";
 /// Holding the power button this long leaves for Nickel, even if the touch
 /// panel isn't working. Shorter presses sleep.
 const HOLD_TO_EXIT: Duration = Duration::from_secs(3);
@@ -150,11 +155,7 @@ fn run(dir: &Path, boot: bool) -> io::Result<()> {
     log!("{framebuffer:?}");
     let width = framebuffer.width;
     let mut kobo = Kobo::new(framebuffer, dir.to_owned());
-
-    let touch = open_input(TOUCH)?;
-    sys::grab(&touch)?;
-    let power = open_input(POWER)?;
-    let cover = open_input(COVER).ok();
+    let mut inputs = Inputs::open(width)?;
 
     let started = Instant::now();
     let books = Arc::new(Folder::new(dir.join("books")));
@@ -175,11 +176,12 @@ fn run(dir: &Path, boot: bool) -> io::Result<()> {
     if boot {
         booted(dir);
     }
+    if inputs.computer {
+        session
+            .handle(Event::Computer(true), Instant::now(), &mut kobo)
+            .map_err(io::Error::other)?;
+    }
 
-    let mut taps = Touch::default();
-    // When the power button went down, if it's down. A release with no
-    // press, such as after the press that woke the device, does nothing.
-    let mut power_down: Option<Instant> = None;
     let mut tick_at = session.deadline(Instant::now());
     // For logging each sync as it ends: when the job started, and the last
     // result logged.
@@ -187,45 +189,8 @@ fn run(dir: &Path, boot: bool) -> io::Result<()> {
     let mut last_logged = session.last_sync_at();
     loop {
         let timeout = tick_at.saturating_duration_since(Instant::now());
-        let mut fds = vec![touch.as_fd(), power.as_fd()];
-        if let Some(cover) = &cover {
-            fds.push(cover.as_fd());
-        }
-        let ready = sys::poll(&fds, timeout)?;
+        let mut events = inputs.wait(timeout)?;
         let now = Instant::now();
-        let mut events = Vec::new();
-        if ready[0] {
-            for raw in read_events(&touch) {
-                if let Some((x, y)) = taps.feed(raw, width) {
-                    events.push(Event::Tap { x, y });
-                }
-            }
-        }
-        if ready[1] {
-            for raw in read_events(&power) {
-                if raw.kind != EV_KEY || raw.code != KEY_POWER {
-                    continue;
-                }
-                match (raw.value, power_down.take()) {
-                    (1, _) => power_down = Some(now),
-                    (0, Some(down)) if now.duration_since(down) >= HOLD_TO_EXIT => {
-                        log!("power button held: leaving for Nickel");
-                        events.push(Event::Exit);
-                    }
-                    (0, Some(_)) => events.push(Event::Power),
-                    _ => {}
-                }
-            }
-        }
-        if let Some(cover) = &cover
-            && ready.get(2) == Some(&true)
-        {
-            for raw in read_events(cover) {
-                if raw.kind == EV_KEY {
-                    log!("cover: key {} = {}", raw.code, raw.value);
-                }
-            }
-        }
         if now >= tick_at {
             events.push(Event::Tick);
         }
@@ -248,6 +213,106 @@ fn run(dir: &Path, boot: bool) -> io::Result<()> {
         }
         log_sync(&session, &mut job_started, &mut last_logged);
         tick_at = session.deadline(Instant::now());
+    }
+}
+
+/// Everything the reader waits on: the touch panel, the power button, the
+/// sleep cover, and the kernel's device events for USB.
+struct Inputs {
+    touch: File,
+    power: File,
+    cover: Option<File>,
+    uevents: Option<File>,
+    taps: Touch,
+    width: u32,
+    /// When the power button went down, if it's down. A release with no
+    /// press, such as after the press that woke the device, does nothing.
+    power_down: Option<Instant>,
+    /// Plugged into a computer, as last seen.
+    computer: bool,
+}
+
+impl Inputs {
+    fn open(width: u32) -> io::Result<Self> {
+        let touch = open_input(TOUCH)?;
+        sys::grab(&touch)?;
+        let uevents = match sys::uevents() {
+            Ok(socket) => Some(socket),
+            Err(error) => {
+                log!("no device events, so USB isn't noticed: {error}");
+                None
+            }
+        };
+        Ok(Self {
+            touch,
+            power: open_input(POWER)?,
+            cover: open_input(COVER).ok(),
+            uevents,
+            taps: Touch::default(),
+            width,
+            power_down: None,
+            computer: plugged_into_computer(),
+        })
+    }
+
+    /// Waits up to `timeout` for something to happen, and says what did.
+    fn wait(&mut self, timeout: Duration) -> io::Result<Vec<Event>> {
+        let mut fds = vec![self.touch.as_fd(), self.power.as_fd()];
+        let cover_at = self.cover.as_ref().map(|cover| {
+            fds.push(cover.as_fd());
+            fds.len() - 1
+        });
+        let uevents_at = self.uevents.as_ref().map(|uevents| {
+            fds.push(uevents.as_fd());
+            fds.len() - 1
+        });
+        let ready = sys::poll(&fds, timeout)?;
+        let now = Instant::now();
+        let mut events = Vec::new();
+        if ready[0] {
+            for raw in read_events(&self.touch) {
+                if let Some((x, y)) = self.taps.feed(raw, self.width) {
+                    events.push(Event::Tap { x, y });
+                }
+            }
+        }
+        if ready[1] {
+            for raw in read_events(&self.power) {
+                if raw.kind != EV_KEY || raw.code != KEY_POWER {
+                    continue;
+                }
+                match (raw.value, self.power_down.take()) {
+                    (1, _) => self.power_down = Some(now),
+                    (0, Some(down)) if now.duration_since(down) >= HOLD_TO_EXIT => {
+                        log!("power button held: leaving for Nickel");
+                        events.push(Event::Exit);
+                    }
+                    (0, Some(_)) => events.push(Event::Power),
+                    _ => {}
+                }
+            }
+        }
+        if let Some(cover) = &self.cover
+            && cover_at.is_some_and(|at| ready[at])
+        {
+            for raw in read_events(cover) {
+                if raw.kind == EV_KEY {
+                    log!("cover: key {} = {}", raw.code, raw.value);
+                }
+            }
+        }
+        if let Some(uevents) = &self.uevents
+            && uevents_at.is_some_and(|at| ready[at])
+        {
+            drain(uevents);
+            let plugged = plugged_into_computer();
+            if plugged != self.computer {
+                self.computer = plugged;
+                log!("USB: {}", if plugged { "a computer" } else { "unplugged" });
+                events.push(Event::Computer(plugged));
+            }
+        }
+        Ok(events)
     }
 }
 
@@ -295,6 +360,24 @@ fn log_sync(
     }
 }
 
+/// Whether the USB cable goes to a computer, rather than a charger or
+/// nothing.
+fn plugged_into_computer() -> bool {
+    fs::read_to_string(EXTCON).is_ok_and(|state| to_computer(&state))
+}
+
+fn to_computer(state: &str) -> bool {
+    state
+        .lines()
+        .any(|line| matches!(line.trim(), "SDP=1" | "CDP=1"))
+}
+
+/// Reads what's waiting on a non-blocking socket, to throw it away.
+fn drain(mut socket: &File) {
+    let mut buffer = [0u8; 4096];
+    while socket.read(&mut buffer).is_ok_and(|n| n > 0) {}
+}
+
 fn open_input(path: &str) -> io::Result<File> {
     OpenOptions::new()
         .read(true)
@@ -314,4 +397,18 @@ fn read_events(mut device: &File) -> Vec<RawEvent> {
         }
     }
     events
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_computer_is_sdp_or_cdp_and_a_charger_isnt() {
+        let state = |sdp, dcp, cdp| format!("USB=1\nUSB_HOST=0\nSDP={sdp}\nDCP={dcp}\nCDP={cdp}\n");
+        assert!(to_computer(&state(1, 0, 0)));
+        assert!(to_computer(&state(0, 0, 1)));
+        assert!(!to_computer(&state(0, 1, 0)), "a charger");
+        assert!(!to_computer(&state(0, 0, 0)));
+    }
 }

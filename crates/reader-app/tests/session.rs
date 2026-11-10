@@ -1063,3 +1063,63 @@ fn ssh_without_wifi_says_why() {
     run.tap(SYNC_SSH.0, SYNC_SSH.1);
     run.until_idle();
 }
+
+const USB_CONNECT: (f32, f32) = (296.0, 1376.0);
+const USB_NOT_NOW: (f32, f32) = (776.0, 1376.0);
+
+#[test]
+fn a_computer_plugged_in_offers_nickel_for_usb() {
+    let mut run = Run::new();
+    run.tap(FORWARD.0, FORWARD.1);
+    let page = run.page();
+    run.send(Event::Computer(true));
+    assert!(run.session.in_usb());
+    // Not now: back to the page, and no asking again while plugged in.
+    run.tap(USB_NOT_NOW.0, USB_NOT_NOW.1);
+    assert!(!run.session.in_usb());
+    assert_eq!(run.page(), page);
+    run.send(Event::Computer(true));
+    assert!(!run.session.in_usb());
+    // Unplugged and plugged in again, it asks again, and Connect leaves for
+    // Nickel with the place saved.
+    run.send(Event::Computer(false));
+    run.send(Event::Computer(true));
+    assert!(run.session.in_usb());
+    run.device
+        .files
+        .retain(|name, _| !name.starts_with("position-"));
+    assert_eq!(run.tap(USB_CONNECT.0, USB_CONNECT.1), Flow::Exit);
+    assert!(run.device.files.keys().any(|k| k.starts_with("position-")));
+}
+
+#[test]
+fn unplugging_takes_the_usb_screen_away() {
+    let mut run = Run::at_home(Fake::default());
+    run.send(Event::Computer(true));
+    assert!(run.session.in_usb());
+    run.send(Event::Computer(false));
+    assert!(run.session.at_home());
+}
+
+#[test]
+fn plugged_in_while_asleep_it_asks_on_waking() {
+    let mut run = Run::new();
+    run.device.can_suspend = false;
+    let page = run.page();
+    run.send(Event::Power);
+    run.send(Event::Computer(true));
+    assert!(!run.session.in_usb(), "still asleep");
+    run.send(Event::Power);
+    assert!(run.session.in_usb());
+    run.tap(USB_NOT_NOW.0, USB_NOT_NOW.1);
+    assert_eq!(run.page(), page);
+    assert!(!run.session.in_usb());
+    // Sleeping from the USB screen wakes to where it came from.
+    run.send(Event::Computer(false));
+    run.send(Event::Computer(true));
+    run.send(Event::Power);
+    run.send(Event::Power);
+    assert!(run.session.in_usb(), "still plugged in, so it asks again");
+    run.tap(USB_NOT_NOW.0, USB_NOT_NOW.1);
+    assert_eq!(run.page(), page);
+}

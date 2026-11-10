@@ -43,6 +43,7 @@ mod shelf;
 mod sync;
 mod sync_page;
 mod ui;
+mod usb_page;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -114,6 +115,9 @@ pub enum Event {
     Exit,
     /// [`Session::deadline`] has passed.
     Tick,
+    /// The device was plugged into a computer (true), or unplugged from
+    /// it (false). A charger doesn't count.
+    Computer(bool),
 }
 
 /// How the panel redraws.
@@ -273,6 +277,11 @@ enum Mode {
     Search(search::Layout),
     Settings(settings::Layout),
     Sync(sync_page::Layout),
+    /// Plugged into a computer: offering to hand over to Nickel.
+    Usb {
+        layout: usb_page::Layout,
+        back: Back,
+    },
     Reading,
     Menu(menu::Layout),
     /// On the sleep screen, waiting to suspend, or awake again after a
@@ -321,6 +330,10 @@ pub struct Session<R> {
     woke: Option<Instant>,
     /// Set by [`Session::enable_sync`].
     syncer: Option<sync::Syncer>,
+    /// Plugged into a computer, from [`Event::Computer`].
+    computer: bool,
+    /// Not now was tapped since it was plugged in, so don't ask again.
+    usb_declined: bool,
 }
 
 impl<R> std::fmt::Debug for Session<R> {
@@ -370,6 +383,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             last_touch: now,
             woke: None,
             syncer: None,
+            computer: false,
+            usb_declined: false,
         };
         session.go_home(device, Refresh::Full, now);
         Ok(session)
@@ -392,6 +407,11 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     /// Whether the settings screen is up.
     pub fn in_settings(&self) -> bool {
         matches!(self.mode, Mode::Settings(_))
+    }
+
+    /// Whether the screen offering to connect over USB is up.
+    pub fn in_usb(&self) -> bool {
+        matches!(self.mode, Mode::Usb { .. })
     }
 
     /// Whether the sync screen is up.
@@ -727,6 +747,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             | Mode::Search(_)
             | Mode::Settings(_)
             | Mode::Sync(_)
+            | Mode::Usb { .. }
             | Mode::Reading
             | Mode::Menu(_) => self.last_touch + AUTO_SLEEP,
         };
@@ -753,6 +774,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let in_search = matches!(self.mode, Mode::Search(_));
         let in_settings = matches!(self.mode, Mode::Settings(_));
         let in_sync = matches!(self.mode, Mode::Sync(_));
+        let in_usb = matches!(self.mode, Mode::Usb { .. });
         let in_menu = matches!(self.mode, Mode::Menu(_));
         let asleep = matches!(self.mode, Mode::Asleep { .. });
         match event {
@@ -761,6 +783,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 return Ok(Flow::Exit);
             }
             Event::Tick => self.tick(now, device)?,
+            Event::Computer(plugged) => self.computer(plugged, device, now)?,
             Event::Tap { .. } | Event::Power if asleep => self.wake(device, now)?,
             _ if asleep => {}
             Event::Power => {
@@ -778,7 +801,14 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Event::Tap { x, y } if in_search => self.search_tap(x, y, now, device)?,
             Event::Tap { x, y } if in_settings => self.settings_tap(x, y, now, device),
             Event::Tap { x, y } if in_sync => self.sync_tap(x, y, now, device),
-            _ if at_home || in_library || in_search || in_settings || in_sync || in_menu => {}
+            Event::Tap { x, y } if in_usb => return self.usb_tap(x, y, now, device),
+            _ if at_home
+                || in_library
+                || in_search
+                || in_settings
+                || in_sync
+                || in_usb
+                || in_menu => {}
             Event::Tap { x, y } => self.reading_tap(x, y, now, device)?,
             Event::Turn(turn) => self.turn(turn, now, device)?,
             Event::Back => {
@@ -1230,6 +1260,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             | Mode::Search(_)
             | Mode::Settings(_)
             | Mode::Sync(_)
+            | Mode::Usb { .. }
             | Mode::Reading
             | Mode::Menu(_) => {
                 let idle = now.duration_since(self.last_touch) >= AUTO_SLEEP;
@@ -1241,16 +1272,109 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         Ok(())
     }
 
-    fn sleep(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
-        self.save(device);
-        let back = match &self.mode {
+    /// The screen that's up, to come back to.
+    fn here(&self) -> Back {
+        match &self.mode {
             Mode::Home(_) => Back::Home,
             Mode::Library(layout) => Back::Library(layout.page()),
             Mode::Search(layout) => Back::Search(layout.query().to_owned(), layout.library_page()),
             Mode::Settings(_) => Back::Settings,
             Mode::Sync(_) => Back::Sync,
-            Mode::Reading | Mode::Menu(_) | Mode::Asleep { .. } => Back::Reading,
+            Mode::Usb { back, .. } | Mode::Asleep { back, .. } => back.clone(),
+            Mode::Reading | Mode::Menu(_) => Back::Reading,
+        }
+    }
+
+    /// Shows `back` again.
+    fn go_back(
+        &mut self,
+        back: Back,
+        device: &mut dyn Device,
+        now: Instant,
+    ) -> Result<(), AppError> {
+        match back {
+            Back::Reading if self.book.is_some() => {
+                self.mode = Mode::Reading;
+                return self.show_page(device, Refresh::Full, now);
+            }
+            Back::Library(page) => self.show_library(page, device, Refresh::Full, now),
+            Back::Search(query, page) => {
+                self.show_search(query, page, device, Refresh::Full, now);
+            }
+            Back::Settings => self.show_settings(device, Refresh::Full, now),
+            Back::Sync => self.show_sync(device, Refresh::Full, now),
+            Back::Home | Back::Reading => self.go_home(device, Refresh::Full, now),
+        }
+        Ok(())
+    }
+
+    /// Plugged into a computer, or unplugged: offers to hand over to Nickel
+    /// for USB, unless that was turned down already, or it's asleep, in
+    /// which case it asks on waking.
+    fn computer(
+        &mut self,
+        plugged: bool,
+        device: &mut dyn Device,
+        now: Instant,
+    ) -> Result<(), AppError> {
+        let was = std::mem::replace(&mut self.computer, plugged);
+        if !plugged {
+            self.usb_declined = false;
+            if let Mode::Usb { back, .. } = &self.mode {
+                let back = back.clone();
+                return self.go_back(back, device, now);
+            }
+            return Ok(());
+        }
+        if !was && !matches!(self.mode, Mode::Asleep { .. }) {
+            self.offer_usb(device, now);
+        }
+        Ok(())
+    }
+
+    fn offer_usb(&mut self, device: &mut dyn Device, now: Instant) {
+        if self.usb_declined || matches!(self.mode, Mode::Usb { .. }) {
+            return;
+        }
+        self.save(device);
+        let back = self.here();
+        let settings = Settings::default();
+        let layout = usb_page::Layout::new(settings.width, settings.height);
+        let battery = battery_text(device);
+        layout.draw(&mut self.screen, &mut self.ui, &battery);
+        device.show(&self.screen, Refresh::Full);
+        self.guard.refreshing(now + Refresh::Full.duration());
+        self.mode = Mode::Usb { layout, back };
+    }
+
+    fn usb_tap(
+        &mut self,
+        x: f32,
+        y: f32,
+        now: Instant,
+        device: &mut dyn Device,
+    ) -> Result<Flow, AppError> {
+        let Mode::Usb { layout, back } = &self.mode else {
+            return Ok(Flow::Continue);
         };
+        match layout.hit(x, y) {
+            Some(usb_page::Action::Connect) => {
+                self.save(device);
+                Ok(Flow::Exit)
+            }
+            Some(usb_page::Action::NotNow) => {
+                self.usb_declined = true;
+                let back = back.clone();
+                self.go_back(back, device, now)?;
+                Ok(Flow::Continue)
+            }
+            None => Ok(Flow::Continue),
+        }
+    }
+
+    fn sleep(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
+        self.save(device);
+        let back = self.here();
         if back == Back::Reading {
             self.compose_page()?;
         }
@@ -1303,20 +1427,12 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         if due {
             self.start_sync(device, now);
         }
-        match back {
-            Back::Reading if self.book.is_some() => {
-                self.mode = Mode::Reading;
-                return self.show_page(device, Refresh::Full, now);
-            }
-            Back::Library(page) => self.show_library(page, device, Refresh::Full, now),
-            Back::Search(query, page) => {
-                self.show_search(query, page, device, Refresh::Full, now);
-            }
-            Back::Settings => self.show_settings(device, Refresh::Full, now),
-            Back::Sync => self.show_sync(device, Refresh::Full, now),
-            Back::Home | Back::Reading => self.go_home(device, Refresh::Full, now),
+        if self.computer && !self.usb_declined {
+            // Plugged in while it slept: that first, going back to `back`.
+            self.offer_usb(device, now);
+            return Ok(());
         }
-        Ok(())
+        self.go_back(back, device, now)
     }
 
     /// Copies the current page into `screen`, to draw over.
