@@ -132,7 +132,7 @@ pub fn paginate(
     chapter: &Chapter,
     images: &[ImageInfo],
 ) -> Vec<PageStart> {
-    paginate_with_top(typesetter, index, chapter, images, None)
+    paginate_with_top(typesetter, index, chapter, images, None, &mut || false).unwrap_or_default()
 }
 
 /// Like [`paginate`], but a page starts with the line that holds `top`, a
@@ -146,7 +146,31 @@ pub fn paginate_keeping(
     images: &[ImageInfo],
     top: Position,
 ) -> Vec<PageStart> {
-    paginate_with_top(typesetter, top.chapter, chapter, images, Some(top))
+    paginate_with_top(
+        typesetter,
+        top.chapter,
+        chapter,
+        images,
+        Some(top),
+        &mut || false,
+    )
+    .unwrap_or_default()
+}
+
+/// Blocks laid out between asking whether to stop.
+const BLOCKS_BETWEEN_STOPS: usize = 16;
+
+/// [`paginate`], or with `top` [`paginate_keeping`], giving up with `None`
+/// as soon as `stop` says so: a long chapter takes a second on the Kobo.
+pub(crate) fn paginate_unless(
+    typesetter: &mut Typesetter,
+    index: u32,
+    chapter: &Chapter,
+    images: &[ImageInfo],
+    top: Option<Position>,
+    stop: &mut dyn FnMut() -> bool,
+) -> Option<Vec<PageStart>> {
+    paginate_with_top(typesetter, index, chapter, images, top, stop)
 }
 
 fn paginate_with_top(
@@ -155,7 +179,8 @@ fn paginate_with_top(
     chapter: &Chapter,
     images: &[ImageInfo],
     top: Option<Position>,
-) -> Vec<PageStart> {
+    stop: &mut dyn FnMut() -> bool,
+) -> Option<Vec<PageStart>> {
     let at = ChapterRef {
         index,
         chapter,
@@ -163,35 +188,109 @@ fn paginate_with_top(
     };
     let mut items = Vec::new();
     for block in 0..chapter.blocks.len() {
-        let placed = typesetter.block(at, block);
-        let lines = placed.lines.len() as u32;
-        for (line, info) in placed.lines.iter().enumerate() {
-            items.push(Item {
-                block: block as u32,
-                line: line as u32,
-                lines,
-                offset: info.offset,
-                height: info.height,
-                space: if line == 0 { placed.space_before } else { 0.0 },
-                keep_with_next: placed.keep_with_next,
-            });
+        if block % BLOCKS_BETWEEN_STOPS == BLOCKS_BETWEEN_STOPS - 1 && stop() {
+            return None;
         }
+        push_lines(typesetter, at, block, &mut items);
     }
     let available = typesetter.settings().content_height();
     // The last line starting at or before `top`.
-    let forced = top.and_then(|top| {
-        items
-            .partition_point(|item| (item.block, item.offset) <= (top.block, top.offset))
-            .checked_sub(1)
-    });
-    break_pages(&items, available, forced)
-        .into_iter()
-        .map(|i| PageStart {
-            block: items[i].block,
-            line: items[i].line,
-            offset: items[i].offset,
-        })
-        .collect()
+    let forced = top.and_then(|top| last_line_at(&items, top));
+    let starts = break_pages(&items, available, forced);
+    Some(starts.into_iter().map(|i| items[i].start()).collect())
+}
+
+/// A few pages from the line that holds `top`, as [`paginate_keeping`]
+/// would find them, without laying out the rest of the chapter: enough to
+/// show a page straight after the settings change.
+///
+/// Returns where up to `wanted` pages start, then where the page after
+/// them starts, so the last one's end is known; or, when the chapter ends
+/// sooner, where each page up to its end starts, and true.
+pub fn paginate_from(
+    typesetter: &mut Typesetter,
+    chapter: &Chapter,
+    images: &[ImageInfo],
+    top: Position,
+    wanted: usize,
+) -> (Vec<PageStart>, bool) {
+    let at = ChapterRef {
+        index: top.chapter,
+        chapter,
+        images,
+    };
+    let available = typesetter.settings().content_height();
+    let first = (top.block as usize).min(chapter.blocks.len());
+    let mut items = Vec::new();
+    // Where `top`'s line is in `items`, once its block is laid out.
+    let mut from = None;
+    let mut height = 0.0;
+    for block in first..chapter.blocks.len() {
+        let before = items.len();
+        push_lines(typesetter, at, block, &mut items);
+        if from.is_none() {
+            from = Some(last_line_at(&items, top).unwrap_or(0));
+        }
+        height += items[before..]
+            .iter()
+            .map(|item| item.space + item.height)
+            .sum::<f32>();
+        // Breaks are only settled once a line has overflowed onto the page
+        // after: lines on the last page could still be pulled back.
+        if height > available * (wanted + 1) as f32 {
+            let from = from.unwrap_or(0);
+            let starts = break_pages(&items[from..], available, None);
+            if starts.len() > wanted {
+                let starts = starts[..=wanted].iter().map(|&i| items[from + i].start());
+                return (starts.collect(), false);
+            }
+        }
+    }
+    let from = from.unwrap_or(0).min(items.len());
+    let starts = break_pages(&items[from..], available, None);
+    (
+        starts.iter().map(|&i| items[from + i].start()).collect(),
+        true,
+    )
+}
+
+/// Adds block `block`'s lines to `items`.
+fn push_lines(
+    typesetter: &mut Typesetter,
+    at: ChapterRef<'_>,
+    block: usize,
+    items: &mut Vec<Item>,
+) {
+    let placed = typesetter.block(at, block);
+    let lines = placed.lines.len() as u32;
+    for (line, info) in placed.lines.iter().enumerate() {
+        items.push(Item {
+            block: block as u32,
+            line: line as u32,
+            lines,
+            offset: info.offset,
+            height: info.height,
+            space: if line == 0 { placed.space_before } else { 0.0 },
+            keep_with_next: placed.keep_with_next,
+        });
+    }
+}
+
+/// The last line in `items` starting at or before `top`.
+fn last_line_at(items: &[Item], top: Position) -> Option<usize> {
+    items
+        .partition_point(|item| (item.block, item.offset) <= (top.block, top.offset))
+        .checked_sub(1)
+}
+
+impl Item {
+    fn start(&self) -> PageStart {
+        PageStart {
+            block: self.block,
+            line: self.line,
+            offset: self.offset,
+        }
+    }
 }
 
 /// Returns the index of the item that starts each page. If `forced` is

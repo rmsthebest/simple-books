@@ -156,8 +156,7 @@ impl<R: Read + Seek + Send + 'static> OpenBook<R> {
         }
         let index = page.chapter as usize;
         let before: u64 = chapters[..index].iter().map(|c| c.chars).sum();
-        let pages = self.reader.page_map().pages(page.chapter)?.len().max(1);
-        let within = chapters[index].chars as f32 * (page.page as f32 + 1.0) / pages as f32;
+        let within = chapters[index].chars as f32 * self.reader.through_chapter()?;
         Some(((before as f32 + within) / total as f32).clamp(0.0, 1.0))
     }
 
@@ -179,11 +178,12 @@ impl<R: Read + Seek + Send + 'static> OpenBook<R> {
         let open = Arc::clone(&self.open);
         let thread_stop = Arc::clone(&stop);
         let settings = self.reader.settings().clone();
+        let keep = self.reader.keeping();
         std::thread::spawn(move || {
             let Ok(mut book) = open() else {
                 return;
             };
-            let result = paginate_book(&mut book, settings, &mut map, || {
+            let result = paginate_book(&mut book, settings, &mut map, keep, || {
                 thread_stop.load(Ordering::Relaxed)
             });
             if result.is_ok() && map.is_complete() {

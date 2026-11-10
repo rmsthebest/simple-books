@@ -10,11 +10,11 @@
 
 use std::io::{Read, Seek};
 
-use book_format::{BookReader, Chapter, FormatError, ImageInfo, Manifest, Position};
+use book_format::{Block, BookReader, Chapter, FormatError, ImageInfo, Manifest, Position};
 
 use crate::{
     Canvas, PageMap, PageRef, PageStart, Settings, Typesetter,
-    paginate::{draw_page, paginate, paginate_keeping},
+    paginate::{draw_page, paginate, paginate_from, paginate_keeping, paginate_unless},
     typeset::{ChapterRef, Page},
 };
 
@@ -27,6 +27,9 @@ const CHAPTERS_KEPT: usize = 2;
 const REACH_MM: f32 = 3.0;
 /// Followed links remembered for [`Reader::back`].
 const HISTORY_KEPT: usize = 64;
+/// Pages laid out straight away after the settings change: the one shown,
+/// and the next for [`Reader::prepare`].
+const WINDOW_PAGES: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Turn {
@@ -53,6 +56,44 @@ pub struct Reader<R> {
     current: Option<PageRef>,
     /// Where each followed link was followed from. Most recent last.
     history: Vec<Position>,
+    /// After [`Reader::relayout`], the pages around the reader's place,
+    /// until their chapter is laid out in full.
+    window: Option<Window>,
+}
+
+/// A few pages of a chapter, from the line the reader was on, laid out
+/// without the rest of it. Page 0 is the one at `top`, whatever its number
+/// in the whole chapter turns out to be. The chapter stays `None` in the
+/// map meanwhile.
+struct Window {
+    chapter: u32,
+    top: Position,
+    /// Where each page starts, and then where the page after the last
+    /// starts, unless `to_end`.
+    starts: Vec<PageStart>,
+    /// The chapter ends with the last page.
+    to_end: bool,
+    /// How far through the chapter each page ends, from 0 to 1, by
+    /// characters.
+    through: Vec<f32>,
+}
+
+impl Window {
+    fn pages(&self) -> u32 {
+        let pages = if self.to_end {
+            self.starts.len()
+        } else {
+            self.starts.len().saturating_sub(1)
+        };
+        pages as u32
+    }
+
+    /// Whether page 0 is the chapter's first.
+    fn starts_chapter(&self) -> bool {
+        self.starts
+            .first()
+            .is_some_and(|start| start.block == 0 && start.line == 0)
+    }
 }
 
 impl<R> std::fmt::Debug for Reader<R> {
@@ -82,9 +123,11 @@ impl<R: Read + Seek> Reader<R> {
 
     /// Opens a book at `at` after the settings changed, with the line that
     /// holds `at` at the top of the page, so the text the reader was on
-    /// stays where it was. `at`'s chapter is laid out again even if
-    /// `cached` has it; the page map then differs from one laid out from
-    /// the start, so save it ([`Reader::page_map`]) for opening here again.
+    /// stays where it was. Only a couple of pages are laid out from there:
+    /// the rest of `at`'s chapter waits for [`paginate_book`], given
+    /// [`Reader::keeping`], then [`Reader::adopt`], or for a turn past them.
+    /// The page map then differs from one laid out from the start, so save
+    /// it ([`Reader::page_map`]) for opening here again.
     pub fn relayout(
         book: BookReader<R>,
         settings: Settings,
@@ -94,17 +137,50 @@ impl<R: Read + Seek> Reader<R> {
     ) -> Result<Self, ReaderError> {
         let mut reader = Self::new(book, settings, book_key, cached);
         let chapters = reader.map.chapters.len() as u32;
-        if at.chapter < chapters {
-            let index = reader.load_chapter(at.chapter)?;
-            let pages = paginate_keeping(
-                &mut reader.typesetter,
-                &reader.chapters[index].1,
-                &reader.images,
-                at,
-            );
-            reader.map.chapters[at.chapter as usize] = Some(pages);
+        if at.chapter >= chapters {
+            reader.go_to(at)?;
+            return Ok(reader);
         }
-        reader.go_to(at)?;
+        let index = reader.load_chapter(at.chapter)?;
+        let (starts, to_end) = paginate_from(
+            &mut reader.typesetter,
+            &reader.chapters[index].1,
+            &reader.images,
+            at,
+            WINDOW_PAGES,
+        );
+        // Laid out again from `at`, whatever a saved map says.
+        reader.map.chapters[at.chapter as usize] = None;
+        let blocks = &reader.chapters[index].1.blocks;
+        let total = blocks.iter().map(Block::chars).sum::<u64>().max(1) as f32;
+        let through = (1..=starts.len())
+            .map(|end| match starts.get(end) {
+                Some(end) => {
+                    let before: u64 = blocks[..end.block as usize].iter().map(Block::chars).sum();
+                    ((before + u64::from(end.offset)) as f32 / total).min(1.0)
+                }
+                None => 1.0,
+            })
+            .collect();
+        let window = Window {
+            chapter: at.chapter,
+            top: at,
+            starts,
+            to_end,
+            through,
+        };
+        if window.pages() == 0 {
+            // Nothing from `at` on: go by the whole chapter.
+            reader.window = Some(window);
+            reader.finish_window()?;
+            reader.go_to(at)?;
+        } else {
+            reader.window = Some(window);
+            reader.current = Some(PageRef {
+                chapter: at.chapter,
+                page: 0,
+            });
+        }
         Ok(reader)
     }
 
@@ -131,6 +207,7 @@ impl<R: Read + Seek> Reader<R> {
             pages: Vec::new(),
             current: None,
             history: Vec::new(),
+            window: None,
         }
     }
 
@@ -153,9 +230,37 @@ impl<R: Read + Seek> Reader<R> {
         if map.key != self.map.key {
             return;
         }
+        if let Some(window) = &self.window
+            && let Some(Some(pages)) = map.chapters.get(window.chapter as usize)
+        {
+            let pages = pages.clone();
+            self.finish_with(pages);
+        }
         for (mine, theirs) in self.map.chapters.iter_mut().zip(&map.chapters) {
             if mine.is_none() {
                 mine.clone_from(theirs);
+            }
+        }
+    }
+
+    /// Where [`paginate_book`] must keep a page starting, for
+    /// [`Reader::adopt`] to take its map: the reader's place when the
+    /// settings changed, until its chapter is laid out in full.
+    pub fn keeping(&self) -> Option<Position> {
+        self.window.as_ref().map(|window| window.top)
+    }
+
+    /// How far through its chapter the current page ends, from 0 to 1: by
+    /// pages once the chapter is laid out, and by characters before.
+    pub fn through_chapter(&self) -> Option<f32> {
+        let page = self.current?;
+        match &self.window {
+            Some(window) if window.chapter == page.chapter => {
+                window.through.get(page.page as usize).copied()
+            }
+            _ => {
+                let pages = self.map.pages(page.chapter)?.len().max(1);
+                Some((page.page as f32 + 1.0) / pages as f32)
             }
         }
     }
@@ -166,12 +271,24 @@ impl<R: Read + Seek> Reader<R> {
 
     /// Where the current page starts. This is what to save and sync.
     pub fn position(&self) -> Option<Position> {
-        self.map.position(self.current?)
+        let current = self.current?;
+        match &self.window {
+            Some(window) if window.chapter == current.chapter => {
+                let start = window.starts.get(current.page as usize)?;
+                Some(Position {
+                    chapter: current.chapter,
+                    block: start.block,
+                    offset: start.offset,
+                })
+            }
+            _ => self.map.position(current),
+        }
     }
 
     /// Moves to the page that shows `position`. Past the end of a chapter, or
     /// in a chapter with nothing on it, that's the next page there is.
     pub fn go_to(&mut self, position: Position) -> Result<(), ReaderError> {
+        self.finish_window()?;
         let chapters = self.map.chapters.len() as u32;
         if chapters == 0 {
             self.current = None;
@@ -207,7 +324,7 @@ impl<R: Read + Seek> Reader<R> {
         let Some(current) = self.current else {
             return Ok(false);
         };
-        match self.step(current, turn)? {
+        match self.step(current, turn, false)? {
             Some(page) => {
                 self.current = Some(page);
                 Ok(true)
@@ -224,7 +341,9 @@ impl<R: Read + Seek> Reader<R> {
         };
         self.draw(current)?;
         for turn in [Turn::Next, Turn::Previous] {
-            if let Some(page) = self.step(current, turn)? {
+            // Not past a window's pages: that would lay out the whole
+            // chapter here, which the background does instead.
+            if let Some(page) = self.step(current, turn, true)? {
                 self.draw(page)?;
             }
         }
@@ -280,8 +399,30 @@ impl<R: Read + Seek> Reader<R> {
     }
 
     /// The page after or before `from`, paginating chapters as needed.
-    fn step(&mut self, from: PageRef, turn: Turn) -> Result<Option<PageRef>, ReaderError> {
-        let pages = self.paginated(from.chapter)?.len() as u32;
+    /// With `lazy`, a turn past a window's pages is `None` instead.
+    fn step(
+        &mut self,
+        mut from: PageRef,
+        turn: Turn,
+        lazy: bool,
+    ) -> Result<Option<PageRef>, ReaderError> {
+        if let Some(window) = &self.window
+            && window.chapter == from.chapter
+        {
+            let past = match turn {
+                Turn::Next => from.page + 1 >= window.pages() && !window.to_end,
+                Turn::Previous => from.page == 0 && !window.starts_chapter(),
+            };
+            if past {
+                if lazy {
+                    return Ok(None);
+                }
+                if let Some(shift) = self.finish_window()? {
+                    from.page += shift;
+                }
+            }
+        }
+        let pages = self.paginated(from.chapter)?;
         match turn {
             Turn::Next if from.page + 1 < pages => Ok(Some(PageRef {
                 page: from.page + 1,
@@ -293,6 +434,56 @@ impl<R: Read + Seek> Reader<R> {
             })),
             _ => self.nearest(from.chapter, turn, false),
         }
+    }
+
+    /// Lays out the window's chapter in full, now. Returns how far its
+    /// pages moved: the window's page 0 is that page in the chapter.
+    fn finish_window(&mut self) -> Result<Option<u32>, ReaderError> {
+        let Some(window) = &self.window else {
+            return Ok(None);
+        };
+        let (chapter, top) = (window.chapter, window.top);
+        let index = self.load_chapter(chapter)?;
+        let pages = paginate_keeping(
+            &mut self.typesetter,
+            &self.chapters[index].1,
+            &self.images,
+            top,
+        );
+        Ok(self.finish_with(pages))
+    }
+
+    /// Puts the window's chapter, laid out in full, in the map, and moves
+    /// the current page and the drawn ones to their numbers in it.
+    fn finish_with(&mut self, pages: Vec<PageStart>) -> Option<u32> {
+        let window = self.window.take()?;
+        let chapter = window.chapter;
+        let shown = window.starts.len().min(window.pages() as usize + 1);
+        let shift = pages
+            .iter()
+            .position(|start| *start == window.starts[0])
+            .filter(|&at| pages.get(at..at + shown) == Some(&window.starts[..shown]));
+        self.map.chapters[chapter as usize] = Some(pages);
+        let Some(shift) = shift else {
+            // Laid out some other way: go by where the page starts.
+            self.pages.retain(|(page, _)| page.chapter != chapter);
+            if self.current.is_some_and(|page| page.chapter == chapter) {
+                self.current = self.map.locate(window.top);
+            }
+            return None;
+        };
+        let shift = shift as u32;
+        for (page, _) in &mut self.pages {
+            if page.chapter == chapter {
+                page.page += shift;
+            }
+        }
+        if let Some(current) = &mut self.current
+            && current.chapter == chapter
+        {
+            current.page += shift;
+        }
+        Some(shift)
     }
 
     /// Going forward, the first page of the nearest chapter after `chapter`
@@ -314,7 +505,7 @@ impl<R: Read + Seek> Reader<R> {
             }
         };
         while let Some(chapter) = next.filter(|c| *c < chapters) {
-            let pages = self.paginated(chapter)?.len() as u32;
+            let pages = self.paginated(chapter)?;
             if pages > 0 {
                 let page = match turn {
                     Turn::Next => 0,
@@ -330,7 +521,14 @@ impl<R: Read + Seek> Reader<R> {
         Ok(None)
     }
 
-    fn paginated(&mut self, chapter: u32) -> Result<&[PageStart], ReaderError> {
+    /// How many pages the chapter has, laying it out if it isn't yet. A
+    /// window counts only its own pages.
+    fn paginated(&mut self, chapter: u32) -> Result<u32, ReaderError> {
+        if let Some(window) = &self.window
+            && window.chapter == chapter
+        {
+            return Ok(window.pages());
+        }
         if self.map.pages(chapter).is_none() {
             let index = self.load_chapter(chapter)?;
             let pages = paginate(
@@ -341,7 +539,10 @@ impl<R: Read + Seek> Reader<R> {
             );
             self.map.chapters[chapter as usize] = Some(pages);
         }
-        Ok(self.map.pages(chapter).unwrap_or_default())
+        Ok(self
+            .map
+            .pages(chapter)
+            .map_or(0, |pages| pages.len() as u32))
     }
 
     /// Makes sure a chapter is parsed and returns where it is in the cache.
@@ -384,6 +585,7 @@ impl<R: Read + Seek> Reader<R> {
             typesetter,
             map,
             chapters,
+            window,
             ..
         } = self;
         let at = ChapterRef {
@@ -391,7 +593,10 @@ impl<R: Read + Seek> Reader<R> {
             chapter: &chapters[index].1,
             images,
         };
-        let pages = map.pages(page.chapter).unwrap_or_default();
+        let pages = match window {
+            Some(window) if window.chapter == page.chapter => &window.starts,
+            _ => map.pages(page.chapter).unwrap_or_default(),
+        };
         draw_page(
             typesetter,
             &mut drawn,
@@ -411,18 +616,27 @@ fn decode<R: Read + Seek>(book: &mut BookReader<R>, id: u32) -> Option<image::Gr
 }
 
 /// Paginates every chapter of a book that `map` doesn't have yet, for a
-/// background thread with its own copy of the book. `stop` is asked between
-/// chapters, so the thread can give up when the book is closed or the
-/// settings change.
+/// background thread with its own copy of the book. With `keep`, from
+/// [`Reader::keeping`], a page starts there, and its chapter goes first.
+/// `stop` is asked every few paragraphs, so the thread can give up soon
+/// after the book is closed or the settings change.
 pub fn paginate_book<R: Read + Seek>(
     book: &mut BookReader<R>,
     settings: Settings,
     map: &mut PageMap,
+    keep: Option<Position>,
     mut stop: impl FnMut() -> bool,
 ) -> Result<(), ReaderError> {
     let manifest = book.manifest().clone();
     let mut typesetter = Typesetter::new(settings, manifest.language.as_deref());
-    for index in 0..map.chapters.len() {
+    let chapters = map.chapters.len();
+    let first = keep
+        .map(|keep| keep.chapter as usize)
+        .filter(|&c| c < chapters);
+    let order = first
+        .into_iter()
+        .chain((0..chapters).filter(|&c| Some(c) != first));
+    for index in order {
         if map.chapters[index].is_some() {
             continue;
         }
@@ -430,12 +644,18 @@ pub fn paginate_book<R: Read + Seek>(
             break;
         }
         let chapter = book.chapter(index)?;
-        map.chapters[index] = Some(paginate(
+        let top = keep.filter(|top| top.chapter as usize == index);
+        let Some(pages) = paginate_unless(
             &mut typesetter,
             index as u32,
             &chapter,
             &manifest.images,
-        ));
+            top,
+            &mut stop,
+        ) else {
+            break;
+        };
+        map.chapters[index] = Some(pages);
     }
     Ok(())
 }

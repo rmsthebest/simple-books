@@ -297,7 +297,10 @@ fn a_background_map_matches_paginating_on_demand() {
     let settings = Settings::default();
     let key = PageMap::key(1, &settings);
     let mut map = PageMap::new(key, 3);
-    paginate_book(&mut open(&bytes), settings.clone(), &mut map, || false).unwrap();
+    paginate_book(&mut open(&bytes), settings.clone(), &mut map, None, || {
+        false
+    })
+    .unwrap();
     assert!(map.is_complete());
 
     let mut reader = Reader::open(open(&bytes), settings.clone(), 1, START, None).unwrap();
@@ -320,7 +323,7 @@ fn bigger_text_makes_more_pages() {
     let bytes = book();
     let count = |settings: Settings| {
         let mut map = PageMap::new(PageMap::key(1, &settings), 3);
-        paginate_book(&mut open(&bytes), settings, &mut map, || false).unwrap();
+        paginate_book(&mut open(&bytes), settings, &mut map, None, || false).unwrap();
         map.total().unwrap()
     };
     let normal = count(Settings::default());
@@ -431,4 +434,111 @@ fn a_tapped_footnote_goes_there_and_back() {
     assert_eq!(reader.current(), Some(here));
     assert!(!reader.back().unwrap());
     assert_eq!(reader.current(), Some(here));
+}
+
+/// Every page from wherever `reader` is to the end of the book, then back
+/// to the start: where each one starts.
+fn walk(reader: &mut Reader<Cursor<Vec<u8>>>) -> Vec<Position> {
+    let mut seen = vec![reader.position().unwrap()];
+    while reader.turn(Turn::Next).unwrap() {
+        seen.push(reader.position().unwrap());
+    }
+    while reader.turn(Turn::Previous).unwrap() {
+        seen.push(reader.position().unwrap());
+    }
+    seen
+}
+
+#[test]
+fn a_relayout_shows_its_page_first_and_lays_out_the_same_pages() {
+    let bytes = book();
+    let settings = Settings::default();
+    let mut map = PageMap::new(PageMap::key(1, &settings), 3);
+    paginate_book(&mut open(&bytes), settings.clone(), &mut map, None, || {
+        false
+    })
+    .unwrap();
+    let bigger = Settings {
+        font_size: settings.font_size * 1.3,
+        ..settings
+    };
+    let total = map.total().unwrap();
+    let tops: Vec<Position> = (0..total)
+        .step_by(total / 3)
+        .filter_map(|n| {
+            let (chapter, page) = (0u32..3).find_map(|chapter| {
+                let before: usize = (0..chapter).map(|c| map.pages(c).unwrap().len()).sum();
+                let page = n.checked_sub(before)?;
+                (page < map.pages(chapter)?.len()).then_some((chapter, page as u32))
+            })?;
+            map.position(PageRef { chapter, page })
+        })
+        .collect();
+    assert!(tops.len() >= 3);
+    for top in tops {
+        // The whole book laid out as the background thread would, keeping
+        // a page at `top`.
+        let mut full = PageMap::new(PageMap::key(1, &bigger), 3);
+        paginate_book(
+            &mut open(&bytes),
+            bigger.clone(),
+            &mut full,
+            Some(top),
+            || false,
+        )
+        .unwrap();
+
+        let mut reader = Reader::relayout(open(&bytes), bigger.clone(), 1, top, None).unwrap();
+        assert_eq!(reader.keeping(), Some(top));
+        assert_eq!(
+            reader.position().map(|p| (p.chapter, p.block)),
+            Some((top.chapter, top.block))
+        );
+        reader.page().unwrap();
+        reader.prepare().unwrap();
+        assert!(
+            reader.page_map().pages(top.chapter).is_none(),
+            "only a few pages laid out, even once prepared"
+        );
+        let through = reader.through_chapter().unwrap();
+        assert!((0.0..=1.0).contains(&through));
+
+        // Taking the background's map: the same page, now numbered.
+        let mut adopted = Reader::relayout(open(&bytes), bigger.clone(), 1, top, None).unwrap();
+        let at = adopted.position();
+        adopted.adopt(&full);
+        assert_eq!(adopted.keeping(), None);
+        assert_eq!(adopted.position(), at);
+        assert_eq!(adopted.current(), full.locate(top), "{top:?}");
+        assert!(
+            (adopted.through_chapter().unwrap() - through).abs() < 0.2,
+            "by characters it's about where it is by pages"
+        );
+
+        // Turning past the few pages lays the chapter out there and then,
+        // the same as the background does.
+        let mut opened =
+            Reader::open(open(&bytes), bigger.clone(), 1, top, Some(full.clone())).unwrap();
+        assert_eq!(walk(&mut reader), walk(&mut opened), "{top:?}");
+        assert_eq!(
+            reader.page_map().pages(top.chapter),
+            full.pages(top.chapter)
+        );
+    }
+}
+
+#[test]
+fn background_pagination_stops_within_a_long_chapter() {
+    let bytes = book();
+    let settings = Settings::default();
+    let mut map = PageMap::new(PageMap::key(1, &settings), 3);
+    let mut asked = 0;
+    // Yes the second time: before the first chapter, then partway into it.
+    paginate_book(&mut open(&bytes), settings, &mut map, None, || {
+        asked += 1;
+        asked > 1
+    })
+    .unwrap();
+    assert_eq!(asked, 2);
+    assert_eq!(map.chapters[0], None, "half a chapter isn't kept");
 }

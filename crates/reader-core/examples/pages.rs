@@ -67,7 +67,7 @@ fn main() {
     let mut book = open();
     let mut map = PageMap::new(PageMap::key(0, &settings), book.manifest().chapters.len());
     let started = Instant::now();
-    paginate_book(&mut book, settings.clone(), &mut map, || false).unwrap();
+    paginate_book(&mut book, settings.clone(), &mut map, None, || false).unwrap();
     let paginated = started.elapsed();
     let total = map.total().unwrap();
     println!(
@@ -167,6 +167,29 @@ fn time_opens(
     warm.page().unwrap();
     println!(
         "reopened with the page map in {opened:?}, and drew a page in {:?}",
+        started.elapsed()
+    );
+
+    // A text-size step halfway through the longest chapter, the worst case.
+    let longest = (0..map.chapters.len() as u32)
+        .max_by_key(|c| map.pages(*c).map_or(0, <[_]>::len))
+        .unwrap_or(0);
+    let half = map.pages(longest).map_or(0, |p| p.len() / 2) as u32;
+    let at = map
+        .position(PageRef {
+            chapter: longest,
+            page: half,
+        })
+        .unwrap_or(start);
+    let bigger = Settings {
+        font_size: settings.font_size + 2.0,
+        ..settings.clone()
+    };
+    let started = Instant::now();
+    let mut stepped = Reader::relayout(open(), bigger, 0, at, None).unwrap();
+    stepped.page().unwrap();
+    println!(
+        "a text-size step in the longest chapter showed its page in {:?}",
         started.elapsed()
     );
     reader
