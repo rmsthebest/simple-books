@@ -26,6 +26,9 @@ cargo clippy -p reader-sync --target armv7-unknown-linux-musleabihf -- -D warnin
 step "clippy (Kobo app)"
 cargo clippy -p reader-kobo --target armv7-unknown-linux-musleabihf -- -D warnings
 
+step "clippy (Kobo SSH server)"
+cargo clippy -p kobo-ssh --target armv7-unknown-linux-musleabihf -- -D warnings
+
 step "launch scripts parse"
 sh -n kobo/reader.sh
 sh -n kobo/ssh.sh

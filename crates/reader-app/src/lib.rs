@@ -63,7 +63,7 @@ pub use library::{Entry, Library};
 use place::SavedPlace;
 use reader_sync::{Report, Spot, Status};
 pub use shelf::Sort;
-pub use sync::{AlwaysOnline, Network, Ssh, SyncSetup};
+pub use sync::{AlwaysOnline, Network, Ssh, SshLogin, SyncSetup};
 
 /// A full refresh every this many turns clears ghosting.
 pub const FULL_EVERY: u32 = 6;
@@ -455,10 +455,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         }
     }
 
-    /// How to log in, while SSH is on.
+    /// The command to log in with, while SSH is on.
     pub fn ssh_login(&self) -> Option<String> {
         match self.syncer.as_ref()?.ssh()? {
-            sync::SshState::On(login) => Some(login),
+            sync::SshState::On(login) => Some(login.command),
             sync::SshState::Off { .. } => None,
         }
     }

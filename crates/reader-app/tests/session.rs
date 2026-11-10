@@ -16,7 +16,7 @@ use book_format::{
 };
 use reader_app::{
     AUTO_SLEEP, Battery, BookFile, Books, Device, Event, FULL_EVERY, Flow, Light, Network, Refresh,
-    SLEEP_RETRY, SUSPEND_DELAY, Session, Sort, Ssh, SyncSetup, Turn,
+    SLEEP_RETRY, SUSPEND_DELAY, Session, Sort, Ssh, SshLogin, SyncSetup, Turn,
 };
 use reader_core::Reader;
 
@@ -971,9 +971,12 @@ impl Network for Shared {
 }
 
 impl Ssh for Shared {
-    fn start(&self) -> Result<String, String> {
+    fn start(&self) -> Result<SshLogin, String> {
         self.0.ssh_starts.fetch_add(1, SeqCst);
-        Ok("ssh root@kobo".to_owned())
+        Ok(SshLogin {
+            command: "ssh root@kobo".to_owned(),
+            password: Some("abcd-efgh".to_owned()),
+        })
     }
     fn stop(&self) {
         self.0.ssh_stops.fetch_add(1, SeqCst);

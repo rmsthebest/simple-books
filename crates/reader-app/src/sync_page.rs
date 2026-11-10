@@ -134,15 +134,22 @@ impl Layout {
             say(canvas, ui, last, &mut y);
         }
         match &self.ssh {
-            Some(SshState::On(login)) => say(
-                canvas,
-                ui,
-                &format!(
-                    "SSH is on: {login}. Anyone on this Wi-Fi can log in, so turn it off when \
-                     you're done. Sleeping turns it off too."
-                ),
-                &mut y,
-            ),
+            Some(SshState::On(login)) => {
+                let text = match &login.password {
+                    Some(password) => format!(
+                        "SSH is on: {}, password {password}. Anyone who can see this screen \
+                         can log in, so turn it off when you're done. Sleeping turns it off \
+                         too.",
+                        login.command
+                    ),
+                    None => format!(
+                        "SSH is on: {}. Anyone on this Wi-Fi can log in, so turn it off when \
+                         you're done. Sleeping turns it off too.",
+                        login.command
+                    ),
+                };
+                say(canvas, ui, &text, &mut y);
+            }
             Some(SshState::Off {
                 problem: Some(problem),
             }) => say(canvas, ui, &format!("SSH didn't start: {problem}"), &mut y),
@@ -284,7 +291,10 @@ mod tests {
         let ssh = [
             None,
             Some(SshState::Off { problem: None }),
-            Some(SshState::On("ssh root@k".into())),
+            Some(SshState::On(crate::SshLogin {
+                command: "ssh root@k".into(),
+                password: Some("abcd-efgh".into()),
+            })),
         ];
         for (view, ssh) in views
             .iter()

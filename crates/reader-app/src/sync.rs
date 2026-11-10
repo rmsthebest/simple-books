@@ -41,8 +41,27 @@ pub trait Network: Send + Sync {
 pub trait Ssh: Send + Sync {
     /// Starts it, with the network up. Returns how to log in, for the
     /// screen, or why it didn't start.
-    fn start(&self) -> Result<String, String>;
+    fn start(&self) -> Result<SshLogin, String>;
     fn stop(&self);
+}
+
+/// How to log in while SSH is on, for the sync screen.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SshLogin {
+    /// Such as `ssh -p 2222 root@192.168.1.94`.
+    pub command: String,
+    /// The password, made fresh each time it's turned on, if there is one.
+    pub password: Option<String>,
+}
+
+impl std::fmt::Debug for SshLogin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Shown on the screen, but never logged.
+        f.debug_struct("SshLogin")
+            .field("command", &self.command)
+            .field("password", &self.password.as_ref().map(|_| "…"))
+            .finish()
+    }
 }
 
 /// A network that's always there, as on a desktop.
@@ -102,7 +121,7 @@ pub(crate) enum Update {
     /// website. Its secret is forgotten.
     Unpaired,
     /// SSH is on; this says how to log in.
-    SshOn(String),
+    SshOn(SshLogin),
     /// SSH didn't start; this says why.
     SshFailed(String),
     Done,
@@ -124,7 +143,7 @@ pub(crate) enum SshState {
         problem: Option<String>,
     },
     /// How to log in.
-    On(String),
+    On(SshLogin),
 }
 
 /// How the last job ended, kept across restarts.
@@ -224,7 +243,7 @@ pub(crate) struct Syncer {
     /// then.
     pub started: Option<Instant>,
     /// How to log in while SSH is on.
-    ssh_on: Option<String>,
+    ssh_on: Option<SshLogin>,
     /// Why SSH last didn't start.
     ssh_problem: Option<String>,
 }
@@ -265,8 +284,8 @@ impl Syncer {
     }
 
     /// How to log in, while SSH is on.
-    pub(crate) fn ssh_login(&self) -> Option<&str> {
-        self.ssh_on.as_deref()
+    pub(crate) fn ssh_login(&self) -> Option<&SshLogin> {
+        self.ssh_on.as_ref()
     }
 
     /// Brings the network up and starts SSH, leaving both on.

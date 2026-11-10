@@ -20,7 +20,8 @@ use std::{
 };
 
 use reader_app::{
-    AlwaysOnline, Battery, Books, Device, Event, Folder, Light, Refresh, Session, Ssh, SyncSetup,
+    AlwaysOnline, Battery, Books, Device, Event, Folder, Light, Refresh, Session, Ssh, SshLogin,
+    SyncSetup,
 };
 use reader_core::Canvas;
 
@@ -196,8 +197,11 @@ fn sync_screens(run: &mut Run) {
 struct StandInSsh;
 
 impl Ssh for StandInSsh {
-    fn start(&self) -> Result<String, String> {
-        Ok("ssh -p 2222 root@192.168.1.50".to_owned())
+    fn start(&self) -> Result<SshLogin, String> {
+        Ok(SshLogin {
+            command: "ssh -p 2222 root@192.168.1.50".to_owned(),
+            password: Some("kq7m-x3fh".to_owned()),
+        })
     }
 
     fn stop(&self) {}

@@ -1,0 +1,21 @@
+[package]
+name = "kobo-ssh"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The SSH server the simple-books reader starts on the Kobo: a password shown on its screen, or a key, and a root shell."
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "simple-books-ssh"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+russh = { version = "0.63", default-features = false, features = ["ring"] }
+tokio = { version = "1", features = ["rt", "net", "io-util", "io-std", "macros", "time", "sync", "process"] }

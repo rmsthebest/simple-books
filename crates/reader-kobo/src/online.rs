@@ -1,10 +1,11 @@
-//! Going online to sync: Wi-Fi and SSH through the scripts beside the
-//! binary (`wifi.sh`, `ssh.sh`), and which server to sync with.
+//! Going online to sync: Wi-Fi through `wifi.sh` and SSH through
+//! `simple-books-ssh`, both beside the binary, and which server to sync
+//! with.
 
 use std::{
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::{
         Mutex, PoisonError,
         atomic::{AtomicU32, Ordering},
@@ -12,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use reader_app::{Network, Ssh};
+use reader_app::{Network, Ssh, SshLogin};
 
 use crate::log;
 
@@ -70,53 +71,118 @@ impl Network for Wifi {
     }
 }
 
-/// KOReader's dropbear, as the Nickelite SSH entries run it.
+/// Our own SSH server, `simple-books-ssh`, beside the reader. It gets a
+/// fresh password on its stdin and serves until stdin closes, so it stops
+/// with the reader, however the reader stops.
 pub(crate) struct KoboSsh {
-    script: PathBuf,
+    server: PathBuf,
     wifi: PathBuf,
+    log: PathBuf,
+    running: Mutex<Option<Child>>,
 }
+
+/// Where SSH listens.
+const SSH_PORT: u16 = 2222;
+/// Letters for passwords: none that look alike on the screen.
+const PASSWORD_LETTERS: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
 
 impl KoboSsh {
     pub(crate) fn new(dir: &Path) -> Self {
         Self {
-            script: dir.join("ssh.sh"),
+            server: dir.join("simple-books-ssh"),
             wifi: dir.join("wifi.sh"),
+            log: dir.join("reader.log"),
+            running: Mutex::new(None),
         }
     }
 }
 
+/// Eight letters from `/dev/urandom`, as `abcd-efgh`.
+fn password() -> std::io::Result<String> {
+    use std::io::Read;
+    let mut bytes = [0; 8];
+    File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    let letters: String = bytes
+        .iter()
+        .map(|b| char::from(PASSWORD_LETTERS[usize::from(*b) % PASSWORD_LETTERS.len()]))
+        .collect();
+    Ok(format!("{}-{}", &letters[..4], &letters[4..]))
+}
+
 impl Ssh for KoboSsh {
-    fn start(&self) -> Result<String, String> {
-        // dropbear keeps whatever it's given as output, so it gets nothing
-        // and only the exit status is read.
-        let started = Command::new(&self.script)
-            .arg("start")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success());
-        if !started {
-            log!("SSH didn't start");
-            return Err("It needs KOReader installed, for its SSH server.".to_owned());
+    fn start(&self) -> Result<SshLogin, String> {
+        use std::io::Write;
+        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+        if running.is_some() {
+            return Err("It's already on.".to_owned());
         }
+        if !self.server.exists() {
+            return Err("simple-books-ssh is missing. Install Simple Books again.".to_owned());
+        }
+        let password = password().map_err(|error| format!("No password: {error}"))?;
+        let log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log)
+            .map_or_else(|_| Stdio::null(), Stdio::from);
+        let dir = self.server.parent().unwrap_or(Path::new("/"));
+        let mut child = Command::new(&self.server)
+            .arg("--dir")
+            .arg(dir)
+            .arg("--port")
+            .arg(SSH_PORT.to_string())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(log)
+            .spawn()
+            .map_err(|error| format!("Couldn't start it: {error}"))?;
+        let told = child
+            .stdin
+            .as_mut()
+            .is_some_and(|stdin| writeln!(stdin, "{password}").is_ok());
+        // It stops at once if it can't listen, such as with the port taken.
+        std::thread::sleep(Duration::from_millis(300));
+        if !told || !matches!(child.try_wait(), Ok(None)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            log!("SSH didn't start");
+            return Err("It stopped at once; reader.log says why.".to_owned());
+        }
+        *running = Some(child);
         let address = run(&self.wifi, "address").unwrap_or_default();
         let address = address.trim();
         log!("SSH on at {address}");
-        if address.is_empty() {
-            Ok("ssh -p 2222 root@<the Kobo's address>".to_owned())
+        let host = if address.is_empty() {
+            "<the Kobo's address>"
         } else {
-            Ok(format!("ssh -p 2222 root@{address}"))
-        }
+            address
+        };
+        Ok(SshLogin {
+            command: format!("ssh -p {SSH_PORT} root@{host}"),
+            password: Some(password),
+        })
     }
 
     fn stop(&self) {
-        let _ = Command::new(&self.script)
-            .arg("stop")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let Some(mut child) = self
+            .running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        else {
+            return;
+        };
+        // Its stdin closing is what stops it.
+        drop(child.stdin.take());
+        let asked = Instant::now();
+        while matches!(child.try_wait(), Ok(None)) {
+            if asked.elapsed() > Duration::from_secs(3) {
+                let _ = child.kill();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = child.wait();
         log!("SSH off");
     }
 }
@@ -236,5 +302,18 @@ mod tests {
         );
         assert_eq!(from_server_file("books.example.com"), None);
         assert_eq!(from_server_file("https://b.example.com/kobo/x"), None);
+    }
+
+    #[test]
+    fn a_password_is_eight_unambiguous_letters_and_fresh_each_time() {
+        let (a, b) = (password().unwrap(), password().unwrap());
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 9);
+        assert_eq!(&a[4..5], "-");
+        assert!(
+            a.bytes()
+                .filter(|b| *b != b'-')
+                .all(|b| PASSWORD_LETTERS.contains(&b))
+        );
     }
 }
