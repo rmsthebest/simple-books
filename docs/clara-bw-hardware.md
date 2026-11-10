@@ -59,6 +59,42 @@ reader. Secrets such as Wi-Fi passwords and tokens were deliberately not read.
 > up.** Otherwise the fourth such boot ends at the factory-reset prompt.
 > `bootcount-ctl read` shows the count without changing it.
 
+**`/etc/rc.local`**, as of firmware 6.0.279225 (SHA-256 `1ea9a76b94ed759ec181b2dea830e6f6edcd2b890b41c2ba410bf818c7b4b958`,
+read on 2026-11-10):
+
+- It runs with `#!/bin/sh -e`, so **any command in it that fails stops it before Nickel
+  starts**. KOReader's `nickel.sh` notes the same about relaunching a daemon that's still
+  running.
+- In order, it: caches `df`, removes `.kobo/sickel_frozen`, switches fontconfig to medium
+  hinting, sources `/usr/libexec/platform/nickel-env.sh` (`PLATFORM`, `PRODUCT`,
+  `INTERFACE`, `WIFI_MODULE`, `LD_LIBRARY_PATH` and Qt settings), starts a session
+  `dbus-daemon`, kills the boot animation, then starts pulseaudio, speech-dispatcher,
+  `hindenburg`, `memorylogger` and Nickel (in the background, through `multilog`), and
+  finally `/usr/libexec/nickel/udev-sync.sh`.
+- It's run by `/etc/init.d/rc.local` from `rc5.d/S99rc.local`. Only `S99rmnologin.sh`
+  and `S99stop-bootlogd` come after it.
+- **Nothing checks or restores the root filesystem:** there's no dm-verity, and
+  `S29read-only-rootfs-hook.sh` does nothing on a read-write root. `S99ota` only unpacks
+  `.kobo/Kobo.tgz` into `/usr/local/Kobo` and applies `.kobo/update.tar`, a full
+  firmware update that can replace `rc.local`.
+
+**udev events without Nickel.** `/lib/udev/rules.d/99-kobo.rules` runs
+`/usr/libexec/nickel/udev-{input,plug,bat,eject}.sh`. These keep the latest state in
+`/run/kobo/udev/{plug,ac,bat}` (`plug` holds `add` or `remove` for USB). They pass
+events to Nickel through the FIFO `/run/kobo/udev/fifo` when it exists, and otherwise
+append them to `/run/kobo/udev/backlog`, which is capped at 512 KB. So nothing blocks
+while Nickel is away, and `udev-sync.sh` replays the backlog once Nickel is back.
+
+**Started by Nickel, not `rc.local`:** `sickel` (through `sickel-launcher.sh`),
+`fontickel`, `wmt_launcher` and the QtWebEngine processes. Nickelite (`libnm.so` in
+`/usr/local/Kobo/imageformats`) has menu entries and generators but no way to run
+anything when Nickel starts.
+
+**Leftover daemons.** Restarting Nickel by running `rc.local` again, as KOReader and
+`kobo/reader.sh` do, starts a new session `dbus-daemon` each time and never stops the
+old one. Each new Nickel starts another `wmt_launcher` too. On 2026-11-10, after about
+20 such restarts, 20 of each were still running.
+
 **Recovery touch region.** `mount-userdata` waits for a tap on the factory-reset screen
 inside `1080 250 150 550` for products `spaKoboBW` and its relatives, using
 `pickel wait-for-hit`. The arguments look like x, y, width and height in touch
