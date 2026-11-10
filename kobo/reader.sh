@@ -106,18 +106,14 @@ if pkill -0 nickel; then
     for pid in $(pidof wmt_launcher | tr ' ' '\n' | sort -n | sed 1d); do
         kill "${pid}"
     done
-    # Wi-Fi is going off, so an SSH server started from Nickelite has no
-    # more use. The reader can start its own.
-    "${APP_DIR}/ssh.sh" stop
     wifi_off
 fi
 
 "${APP_DIR}/reader-kobo" "$@" </dev/null >/dev/null 2>&1
 status=$?
 say "reader-kobo exited with ${status}"
-# SSH, if the reader left it on, isn't left open for when Nickel turns
-# Wi-Fi on again.
-"${APP_DIR}/ssh.sh" stop
+# SSH, if the reader turned it on, went with it: the server stops when
+# the reader does.
 # Power off (88) or restart (89), from the reader's power screen. It drew
 # what the panel keeps showing, so the screen is left as it is.
 "${APP_DIR}/power.sh" "${status}"

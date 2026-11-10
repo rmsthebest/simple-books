@@ -1,46 +1,40 @@
 #!/bin/sh
-# Builds the reader for the Kobo and installs it over KOReader's SSH server,
-# with the launch script and the Nickelite menu entry, and optionally books.
+# Builds Simple Books for the Kobo and installs it over SSH, for
+# development: what the website's installer copies, and optionally books.
 #
 #   scripts/kobo-deploy.sh 192.168.1.94 [book.book ...]
 #
-# KOBO_SSH replaces the ssh command, for other options or a known_hosts
-# file; the host is still the first argument. The app goes in one tar
-# stream, and each book in one more. See docs/reader-kobo.md.
+# Turn SSH on in the reader's Sync screen first; it listens on port 2222,
+# and a key in .adds/simple-books/authorized_keys saves typing the
+# password. KOBO_SSH replaces the ssh command, for other options or a
+# known_hosts file; the host is still the first argument.
+#
+# The Nickel plugin goes straight into /usr/local/Kobo/imageformats, where
+# Nickel loads it when it next starts, rather than through .kobo/Kobo.tgz
+# and a restart. KOBO_PLUGIN=0 leaves it out. See docs/reader-kobo.md.
 set -eu
 
 host="${1:?usage: scripts/kobo-deploy.sh <kobo address> [book.book ...]}"
 shift
 ssh_command="${KOBO_SSH:-ssh -p 2222}"
-target=armv7-unknown-linux-musleabihf
 
 cd "$(dirname -- "$0")/.."
-cargo build --release -p reader-kobo --target "${target}"
+files="$(sh scripts/build-kobo-files.sh)"
 
-# Overwritten on every run, so nothing needs deleting.
-staging="target/kobo-deploy"
-mkdir -p "${staging}/simple-books" "${staging}/nm"
-if command -v llvm-strip >/dev/null; then
-    llvm-strip -o "${staging}/simple-books/reader-kobo" "target/${target}/release/reader-kobo"
-else
-    cp "target/${target}/release/reader-kobo" "${staging}/simple-books/reader-kobo"
-fi
-cp kobo/reader.sh "${staging}/simple-books/reader.sh"
-cp kobo/ssh.sh "${staging}/simple-books/ssh.sh"
-cp kobo/wifi.sh "${staging}/simple-books/wifi.sh"
-cp kobo/boot.sh "${staging}/simple-books/boot.sh"
-cp kobo/boot-install.sh "${staging}/simple-books/boot-install.sh"
-cp kobo/power.sh "${staging}/simple-books/power.sh"
-cp kobo/nickelite-menu "${staging}/nm/simple-books"
-chmod 755 "${staging}/simple-books/reader-kobo" "${staging}/simple-books/reader.sh" \
-    "${staging}/simple-books/ssh.sh" "${staging}/simple-books/wifi.sh" \
-    "${staging}/simple-books/boot.sh" "${staging}/simple-books/boot-install.sh" \
-    "${staging}/simple-books/power.sh"
-
-tar -C "${staging}" -cf - simple-books nm |
+# One tar stream for the app folder. Files are replaced, never deleted, so
+# the reader's own files there (its place, pairing and settings) stay.
+tar -C "${files}/.adds" -cf - simple-books |
     ${ssh_command} "root@${host}" 'tar -C /mnt/onboard/.adds -xf - && mkdir -p /mnt/onboard/.adds/simple-books/books'
+if [ "${KOBO_PLUGIN:-1}" != 0 ]; then
+    # Written beside it and renamed over it, so a running Nickel keeps the
+    # one it loaded.
+    gzip -dc "${files}/.kobo/Kobo.tgz" | tar -xOf - imageformats/libsimplebooks.so |
+        ${ssh_command} "root@${host}" 'cat >/usr/local/Kobo/imageformats/libsimplebooks.so.new &&
+            chmod 755 /usr/local/Kobo/imageformats/libsimplebooks.so.new &&
+            mv /usr/local/Kobo/imageformats/libsimplebooks.so.new /usr/local/Kobo/imageformats/libsimplebooks.so'
+fi
 for book in "$@"; do
     name="$(basename -- "${book}")"
     ${ssh_command} "root@${host}" "cat > '/mnt/onboard/.adds/simple-books/books/${name}'" <"${book}"
 done
-${ssh_command} "root@${host}" 'sync && ls -la /mnt/onboard/.adds/simple-books /mnt/onboard/.adds/simple-books/books'
+${ssh_command} "root@${host}" 'sync && cat /mnt/onboard/.adds/simple-books/version && ls -la /mnt/onboard/.adds/simple-books/books'

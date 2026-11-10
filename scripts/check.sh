@@ -45,6 +45,7 @@ sh -n scripts/test-boot-install.sh
 sh scripts/test-boot-install.sh
 sh -n scripts/kobo-deploy.sh
 sh -n scripts/build-kobo-plugin.sh
+sh -n scripts/build-kobo-files.sh
 
 step "sqlx cache is current"
 scripts/sqlx-prepare.sh --check
