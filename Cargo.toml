@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/book-convert", "crates/book-format", "crates/epub", "crates/kobo-conf", "crates/reader-app", "crates/reader-core", "crates/reader-emu", "crates/reader-kobo", "crates/sync-proto"]
+members = [".", "crates/book-convert", "crates/book-format", "crates/epub", "crates/kobo-conf", "crates/reader-app", "crates/reader-core", "crates/reader-emu", "crates/reader-kobo", "crates/reader-sync", "crates/sync-proto"]
 resolver = "3"
 
 [workspace.package]
@@ -93,6 +93,7 @@ landlock = { version = "0.4.7", optional = true }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"], optional = true }
 
 [dev-dependencies]
+reader-sync = { path = "crates/reader-sync" }
 futures-util = { version = "0.3.34", default-features = false }
 proptest = "1"
 tempfile = "3"
@@ -118,6 +119,10 @@ required-features = ["ssr"]
 
 [[test]]
 name = "reader_sync"
+required-features = ["ssr"]
+
+[[test]]
+name = "reader_client"
 required-features = ["ssr"]
 
 [features]

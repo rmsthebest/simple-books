@@ -1,0 +1,27 @@
+[package]
+name = "reader-sync"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The simple-books reader's side of its sync with the server."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sync-proto = { path = "../sync-proto" }
+thiserror = "2"
+# Blocking, small, and pure Rust but for ring's bit of C and assembly, which
+# clang builds for the Kobo. Certificates are bundled: the Kobo has its own,
+# but they're Nickel's and may be old.
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+
+[dev-dependencies]
+tempfile = "3"

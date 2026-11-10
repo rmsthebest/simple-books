@@ -20,6 +20,9 @@ cargo test --workspace --features ssr
 step "reader engine links for the Kobo"
 cargo build -p reader-core --examples --target armv7-unknown-linux-musleabihf
 
+step "sync client builds for the Kobo"
+cargo clippy -p reader-sync --target armv7-unknown-linux-musleabihf -- -D warnings
+
 step "clippy (Kobo app)"
 cargo clippy -p reader-kobo --target armv7-unknown-linux-musleabihf -- -D warnings
 

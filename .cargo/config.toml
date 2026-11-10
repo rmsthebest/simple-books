@@ -4,6 +4,9 @@ SQLX_OFFLINE = "true"
 # Leptos reads this when it's compiled to name the WASM file. cargo-leptos sets it, and a
 # plain `cargo build` needs the same value or pages ask for a file that doesn't exist.
 LEPTOS_OUTPUT_NAME = "simple-books"
+# ring, under the reader's HTTPS, has a little C and assembly. clang builds it
+# for the Kobo without a cross toolchain or a sysroot.
+CC_armv7_unknown_linux_musleabihf = "clang"
 
 # The Kobo. Static musl binaries linked with the toolchain's own lld, so no
 # cross C toolchain is needed.
