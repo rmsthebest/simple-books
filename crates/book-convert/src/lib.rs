@@ -167,6 +167,14 @@ pub fn convert<R: Read + Seek, W: Write + Seek>(
     };
     let mut language = metadata.language.clone().filter(|tag| is_language(tag));
     let built = read_chapters(&mut state, html_limits, &mut language)?;
+    // After the chapters, so a cover shown on a page is stored once.
+    let cover = match state.contents.cover().map(str::to_owned) {
+        Some(entry) => match build::Book::image(&mut state, &entry) {
+            ImageUse::Block(index) => Some(index),
+            ImageUse::Small | ImageUse::Missing => None,
+        },
+        None => None,
+    };
 
     // Empty documents, such as a page that only held a cover too small to
     // keep, are left out; a link to one goes to the next chapter instead.
@@ -228,12 +236,19 @@ pub fn convert<R: Read + Seek, W: Write + Seek>(
         hyphenated: hyphenator.is_some(),
         styles_cut_short: state.style_work == 0,
     };
-    let title = metadata.title.unwrap_or_default();
+    let series = metadata.series.map(|name| book_format::Series {
+        name,
+        index: metadata.series_index.filter(|index| index.is_finite()),
+    });
     book_format::write(
         out,
-        title,
-        metadata.authors,
-        language,
+        book_format::About {
+            title: metadata.title.unwrap_or_default(),
+            authors: metadata.authors,
+            language,
+            series,
+            cover,
+        },
         toc,
         &chapters,
         &state.images,

@@ -27,7 +27,7 @@ use crate::server::{
 /// Bump the low part whenever the converter's output gets better, and every
 /// book is converted again in the background. The format version is in the
 /// high part, so a new format always does the same.
-pub const REVISION: i64 = ((FORMAT_VERSION as i64) << 16) | 1;
+pub const REVISION: i64 = ((FORMAT_VERSION as i64) << 16) | 2;
 
 /// The child's address space. A book's text and images are held in memory
 /// while it's written.

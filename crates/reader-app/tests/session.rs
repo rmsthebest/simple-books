@@ -46,9 +46,11 @@ fn book() -> Vec<u8> {
     let mut out = Cursor::new(Vec::new());
     book_format::write(
         &mut out,
-        "Test book".into(),
-        Vec::new(),
-        Some("en".into()),
+        book_format::About {
+            title: "Test book".into(),
+            language: Some("en".into()),
+            ..book_format::About::default()
+        },
         Vec::new(),
         &chapters,
         &[],

@@ -23,6 +23,8 @@ struct Epub {
     spine: Vec<String>,
     nav: Option<String>,
     ncx: Option<String>,
+    /// More of the OPF's `<metadata>`, as XML.
+    metadata: String,
 }
 
 impl Epub {
@@ -33,7 +35,18 @@ impl Epub {
             spine: Vec::new(),
             nav: None,
             ncx: None,
+            metadata: String::new(),
         }
+    }
+
+    fn metadata(mut self, xml: &str) -> Self {
+        self.metadata.push_str(xml);
+        self
+    }
+
+    /// The id the next item added will get.
+    fn next_id(&self) -> String {
+        format!("id{}", self.items.len())
     }
 
     fn chapter(mut self, name: &str, body: &str) -> Self {
@@ -108,8 +121,8 @@ impl Epub {
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
 <dc:title>Test Book</dc:title><dc:creator>Ann Author</dc:creator><dc:language>{}</dc:language>
-</metadata><manifest>{manifest}</manifest><spine{toc}>{spine}</spine></package>"#,
-            self.language
+{}</metadata><manifest>{manifest}</manifest><spine{toc}>{spine}</spine></package>"#,
+            self.language, self.metadata
         );
 
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
@@ -257,6 +270,45 @@ fn an_ordinary_book() {
     assert_eq!(found.manifest.toc[0].title, "Chapter One");
     assert_eq!(found.manifest.toc[0].target, at(1, 0, 0));
     assert_eq!(found.manifest.toc[1].target, at(2, 0, 0));
+}
+
+#[test]
+fn the_series_and_a_cover_off_the_spine_are_kept() {
+    let book = Epub::new().chapter("one.xhtml", "<p>Text.</p>");
+    let cover = book.next_id();
+    let book = book
+        .file("images/cover.png", "image/png", &png(600, 900))
+        .metadata(&format!(
+            r#"<meta name="cover" content="{cover}"/>
+            <meta name="calibre:series" content="The Saga"/>
+            <meta name="calibre:series_index" content="2"/>"#
+        ));
+    let found = converted(&book);
+    let series = found.manifest.series.as_ref().unwrap();
+    assert_eq!(
+        (series.name.as_str(), series.index),
+        ("The Saga", Some(2.0))
+    );
+    // Stored though no page shows it.
+    assert_eq!(found.manifest.cover, Some(0));
+    assert_eq!(found.images.len(), 1);
+}
+
+#[test]
+fn a_cover_shown_on_a_page_is_stored_once() {
+    let book = Epub::new().chapter(
+        "cover.xhtml",
+        r#"<div><img src="images/cover.png" alt="Cover"/></div>"#,
+    );
+    let cover = book.next_id();
+    let book = book
+        .file("images/cover.png", "image/png", &png(600, 900))
+        .chapter("one.xhtml", "<p>Text.</p>")
+        .metadata(&format!(r#"<meta name="cover" content="{cover}"/>"#));
+    let found = converted(&book);
+    assert_eq!(found.manifest.cover, Some(0));
+    assert_eq!(found.images.len(), 1);
+    assert_eq!(found.manifest.series, None);
 }
 
 #[test]

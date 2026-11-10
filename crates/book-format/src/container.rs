@@ -69,6 +69,18 @@ pub struct NewImage {
     pub bytes: Vec<u8>,
 }
 
+/// What's known about a book besides its contents, for [`write`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct About {
+    pub title: String,
+    pub authors: Vec<String>,
+    /// A BCP 47 tag, such as `en` or `de-CH`.
+    pub language: Option<String>,
+    pub series: Option<crate::Series>,
+    /// An index into the images given to [`write`].
+    pub cover: Option<u32>,
+}
+
 /// Writes a book. The chapter lengths in the manifest are worked out here, so
 /// they can't disagree with the chapters.
 ///
@@ -79,18 +91,25 @@ pub struct NewImage {
 /// is over the default [`Limits`], or [`FormatError::Io`].
 pub fn write<W: Write + Seek>(
     out: W,
-    title: String,
-    authors: Vec<String>,
-    language: Option<String>,
+    about: About,
     toc: Vec<TocEntry>,
     chapters: &[Chapter],
     images: &[NewImage],
 ) -> Result<(), FormatError> {
+    let About {
+        title,
+        authors,
+        language,
+        series,
+        cover,
+    } = about;
     let manifest = Manifest {
         format: FORMAT_VERSION,
         title,
         authors,
         language,
+        series,
+        cover,
         chapters: chapters
             .iter()
             .map(|chapter| ChapterInfo {
@@ -294,6 +313,12 @@ fn check_manifest(manifest: &Manifest, limits: &Limits) -> Result<(), FormatErro
             return Err(FormatError::TooLarge);
         }
     }
+    if manifest
+        .cover
+        .is_some_and(|cover| cover as usize >= manifest.images.len())
+    {
+        return Err(FormatError::Corrupt("the cover is missing"));
+    }
     for entry in &manifest.toc {
         check_position(entry.target, manifest)?;
     }
@@ -423,9 +448,16 @@ mod tests {
         let mut out = Cursor::new(Vec::new());
         write(
             &mut out,
-            "Title".to_owned(),
-            vec!["Ann Author".to_owned()],
-            Some("en".to_owned()),
+            About {
+                title: "Title".to_owned(),
+                authors: vec!["Ann Author".to_owned()],
+                language: Some("en".to_owned()),
+                series: Some(crate::Series {
+                    name: "Samples".to_owned(),
+                    index: Some(2.0),
+                }),
+                cover: Some(0),
+            },
             toc,
             chapters,
             images,
@@ -442,6 +474,11 @@ mod tests {
         let mut book = BookReader::open(Cursor::new(bytes), Limits::default()).unwrap();
         let manifest = book.manifest().clone();
         assert_eq!(manifest.title, "Title");
+        assert_eq!(
+            manifest.series.as_ref().map(|s| s.name.as_str()),
+            Some("Samples")
+        );
+        assert_eq!(manifest.cover, Some(0));
         assert_eq!(manifest.toc, toc);
         // "One", then "Hyphen note" without its soft hyphen.
         assert_eq!(manifest.chapters[0].chars, 3 + 11);
@@ -471,9 +508,7 @@ mod tests {
         });
         let result = write(
             Cursor::new(Vec::new()),
-            String::new(),
-            Vec::new(),
-            None,
+            About::default(),
             toc,
             &chapters,
             &images,
@@ -482,9 +517,7 @@ mod tests {
 
         let result = write(
             Cursor::new(Vec::new()),
-            String::new(),
-            Vec::new(),
-            None,
+            About::default(),
             Vec::new(),
             &[],
             &[],
@@ -553,5 +586,35 @@ mod tests {
             BookReader::open(Cursor::new(good), small),
             Err(FormatError::TooLarge)
         ));
+    }
+
+    #[test]
+    fn a_manifest_from_before_series_and_covers_still_opens() {
+        let (chapters, images, toc) = sample();
+        let bytes = written(&chapters, &images, toc);
+        let mut book = BookReader::open(Cursor::new(bytes.clone()), Limits::default()).unwrap();
+        let mut manifest = serde_json::to_value(book.manifest()).unwrap();
+        let fields = manifest.as_object_mut().unwrap();
+        assert!(fields.remove("series").is_some() && fields.remove("cover").is_some());
+        let older = replace_entry(&bytes, MANIFEST, manifest.to_string().as_bytes());
+        book = BookReader::open(Cursor::new(older), Limits::default()).unwrap();
+        assert_eq!(book.manifest().series, None);
+        assert_eq!(book.manifest().cover, None);
+    }
+
+    #[test]
+    fn a_cover_must_be_one_of_the_images() {
+        let (chapters, images, toc) = sample();
+        let result = write(
+            Cursor::new(Vec::new()),
+            About {
+                cover: Some(images.len() as u32),
+                ..About::default()
+            },
+            toc,
+            &chapters,
+            &images,
+        );
+        assert!(matches!(result, Err(FormatError::Corrupt(_))));
     }
 }

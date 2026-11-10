@@ -131,9 +131,11 @@ fn book() -> Vec<u8> {
     let mut out = Cursor::new(Vec::new());
     book_format::write(
         &mut out,
-        "Test".into(),
-        Vec::new(),
-        Some("en".into()),
+        book_format::About {
+            title: "Test".into(),
+            language: Some("en".into()),
+            ..book_format::About::default()
+        },
         Vec::new(),
         &chapters,
         &images,
@@ -334,9 +336,10 @@ fn a_book_with_nothing_in_it_opens() {
     let mut out = Cursor::new(Vec::new());
     book_format::write(
         &mut out,
-        "Blank".into(),
-        Vec::new(),
-        None,
+        book_format::About {
+            title: "Blank".into(),
+            ..book_format::About::default()
+        },
         Vec::new(),
         &[Chapter::default(), Chapter::default()],
         &[],
@@ -369,9 +372,11 @@ fn footnoted_book(target: Position) -> Vec<u8> {
     let mut out = Cursor::new(Vec::new());
     book_format::write(
         &mut out,
-        "Notes".into(),
-        Vec::new(),
-        Some("en".into()),
+        book_format::About {
+            title: "Notes".into(),
+            language: Some("en".into()),
+            ..book_format::About::default()
+        },
         Vec::new(),
         &chapters,
         &[],

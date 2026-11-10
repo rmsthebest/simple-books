@@ -12,7 +12,7 @@ mod container;
 
 use serde::{Deserialize, Serialize};
 
-pub use container::{BookReader, FormatError, Limits, NewImage, write};
+pub use container::{About, BookReader, FormatError, Limits, NewImage, write};
 
 /// Bumped whenever a reader of the old format couldn't read the new one.
 pub const FORMAT_VERSION: u32 = 1;
@@ -40,6 +40,23 @@ pub struct Manifest {
     pub toc: Vec<TocEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageInfo>,
+    /// Added after format 1 was settled, so older books don't have it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<Series>,
+    /// The image to show for the book in a library: an index into
+    /// [`Manifest::images`]. Added after format 1 was settled, like
+    /// [`Manifest::series`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<u32>,
+}
+
+/// The series a book belongs to, and where in it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Series {
+    pub name: String,
+    /// Usually a whole number; 1.5 for a novella between books one and two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<f64>,
 }
 
 /// What the reader needs to know about a chapter before opening it.
