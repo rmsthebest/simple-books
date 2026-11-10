@@ -14,7 +14,7 @@ use book_format::{BookReader, Chapter, FormatError, ImageInfo, Manifest, Positio
 
 use crate::{
     Canvas, PageMap, PageRef, PageStart, Settings, Typesetter,
-    paginate::{draw_page, paginate},
+    paginate::{draw_page, paginate, paginate_keeping},
     typeset::{ChapterRef, Page},
 };
 
@@ -75,6 +75,45 @@ impl<R: Read + Seek> Reader<R> {
         at: Position,
         cached: Option<PageMap>,
     ) -> Result<Self, ReaderError> {
+        let mut reader = Self::new(book, settings, book_key, cached);
+        reader.go_to(at)?;
+        Ok(reader)
+    }
+
+    /// Opens a book at `at` after the settings changed, with the line that
+    /// holds `at` at the top of the page, so the text the reader was on
+    /// stays where it was. `at`'s chapter is laid out again even if
+    /// `cached` has it; the page map then differs from one laid out from
+    /// the start, so save it ([`Reader::page_map`]) for opening here again.
+    pub fn relayout(
+        book: BookReader<R>,
+        settings: Settings,
+        book_key: u64,
+        at: Position,
+        cached: Option<PageMap>,
+    ) -> Result<Self, ReaderError> {
+        let mut reader = Self::new(book, settings, book_key, cached);
+        let chapters = reader.map.chapters.len() as u32;
+        if at.chapter < chapters {
+            let index = reader.load_chapter(at.chapter)?;
+            let pages = paginate_keeping(
+                &mut reader.typesetter,
+                &reader.chapters[index].1,
+                &reader.images,
+                at,
+            );
+            reader.map.chapters[at.chapter as usize] = Some(pages);
+        }
+        reader.go_to(at)?;
+        Ok(reader)
+    }
+
+    fn new(
+        book: BookReader<R>,
+        settings: Settings,
+        book_key: u64,
+        cached: Option<PageMap>,
+    ) -> Self {
         let manifest = book.manifest();
         let key = PageMap::key(book_key, &settings);
         let chapters = manifest.chapters.len();
@@ -83,7 +122,7 @@ impl<R: Read + Seek> Reader<R> {
             .unwrap_or_else(|| PageMap::new(key, chapters));
         let typesetter = Typesetter::new(settings, manifest.language.as_deref());
         let images = manifest.images.clone();
-        let mut reader = Self {
+        Self {
             book,
             images,
             typesetter,
@@ -92,9 +131,7 @@ impl<R: Read + Seek> Reader<R> {
             pages: Vec::new(),
             current: None,
             history: Vec::new(),
-        };
-        reader.go_to(at)?;
-        Ok(reader)
+        }
     }
 
     pub fn manifest(&self) -> &Manifest {

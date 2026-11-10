@@ -373,8 +373,18 @@ fn a_refused_suspend_is_tried_again() {
     assert_eq!(run.device.last, page_screen);
 }
 
+/// Whether the page starts with the line that held `first`: in the same
+/// block, at most a line's worth of characters before it.
+fn starts_with_the_line_of(run: &Run, first: Position) -> bool {
+    let at = run.session.reader().position().unwrap();
+    at.chapter == first.chapter
+        && at.block == first.block
+        && at.offset <= first.offset
+        && first.offset - at.offset < 80
+}
+
 #[test]
-fn stepping_darkness_up_and_back_returns_to_the_page() {
+fn stepping_darkness_keeps_the_first_line_at_the_top() {
     let mut run = Run::new();
     for _ in 0..8 {
         run.tap(FORWARD.0, FORWARD.1);
@@ -383,6 +393,7 @@ fn stepping_darkness_up_and_back_returns_to_the_page() {
     run.tap(MENU.0, MENU.1);
     for _ in 0..3 {
         run.tap(DARKER.0, DARKER.1);
+        assert!(starts_with_the_line_of(&run, before));
     }
     assert_eq!(run.session.reader().settings().weight, 550.0);
     for _ in 0..3 {
@@ -393,15 +404,22 @@ fn stepping_darkness_up_and_back_returns_to_the_page() {
 }
 
 #[test]
-fn stepping_text_size_up_and_back_returns_to_the_page() {
+fn stepping_text_size_keeps_the_first_line_at_the_top() {
     let mut run = Run::new();
     for _ in 0..7 {
         run.tap(FORWARD.0, FORWARD.1);
     }
     let before = run.session.reader().position().unwrap();
+    // Mid-paragraph, so the line breaks around it really change.
+    assert_ne!(before.offset, 0);
     run.tap(MENU.0, MENU.1);
     for _ in 0..3 {
         run.tap(BIGGER.0, BIGGER.1);
+        assert!(
+            starts_with_the_line_of(&run, before),
+            "{:?} for {before:?}",
+            run.session.reader().position()
+        );
     }
     assert_eq!(run.session.reader().settings().font_size, 52.0);
     for _ in 0..3 {

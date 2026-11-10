@@ -132,6 +132,30 @@ pub fn paginate(
     chapter: &Chapter,
     images: &[ImageInfo],
 ) -> Vec<PageStart> {
+    paginate_with_top(typesetter, index, chapter, images, None)
+}
+
+/// Like [`paginate`], but a page starts with the line that holds `top`, a
+/// place in this chapter. For laying the chapter out again with other
+/// settings, so the reader's first line stays at the top of the page. The
+/// pages before it are laid out as usual, so the one just before may be
+/// short.
+pub fn paginate_keeping(
+    typesetter: &mut Typesetter,
+    chapter: &Chapter,
+    images: &[ImageInfo],
+    top: Position,
+) -> Vec<PageStart> {
+    paginate_with_top(typesetter, top.chapter, chapter, images, Some(top))
+}
+
+fn paginate_with_top(
+    typesetter: &mut Typesetter,
+    index: u32,
+    chapter: &Chapter,
+    images: &[ImageInfo],
+    top: Option<Position>,
+) -> Vec<PageStart> {
     let at = ChapterRef {
         index,
         chapter,
@@ -154,7 +178,13 @@ pub fn paginate(
         }
     }
     let available = typesetter.settings().content_height();
-    break_pages(&items, available)
+    // The last line starting at or before `top`.
+    let forced = top.and_then(|top| {
+        items
+            .partition_point(|item| (item.block, item.offset) <= (top.block, top.offset))
+            .checked_sub(1)
+    });
+    break_pages(&items, available, forced)
         .into_iter()
         .map(|i| PageStart {
             block: items[i].block,
@@ -164,8 +194,9 @@ pub fn paginate(
         .collect()
 }
 
-/// Returns the index of the item that starts each page.
-fn break_pages(items: &[Item], available: f32) -> Vec<usize> {
+/// Returns the index of the item that starts each page. If `forced` is
+/// given, a page starts with that item.
+fn break_pages(items: &[Item], available: f32, forced: Option<usize>) -> Vec<usize> {
     if items.is_empty() {
         return Vec::new();
     }
@@ -176,6 +207,11 @@ fn break_pages(items: &[Item], available: f32) -> Vec<usize> {
     let mut used = 0.0;
     let mut i = 0;
     while i < items.len() {
+        if forced == Some(i) && i > start {
+            starts.push(i);
+            start = i;
+            used = 0.0;
+        }
         let item = &items[i];
         let height = if i == start {
             item.height
@@ -302,7 +338,7 @@ mod tests {
     #[test]
     fn fills_pages() {
         let items = paragraph(0, 25);
-        assert_eq!(break_pages(&items, 100.0), [0, 10, 20]);
+        assert_eq!(break_pages(&items, 100.0, None), [0, 10, 20]);
     }
 
     #[test]
@@ -310,19 +346,19 @@ mod tests {
         // 9 lines, then a paragraph whose first line would be alone at the bottom.
         let mut items = paragraph(0, 9);
         items.extend(paragraph(1, 5));
-        assert_eq!(break_pages(&items, 100.0), [0, 9]);
+        assert_eq!(break_pages(&items, 100.0, None), [0, 9]);
     }
 
     #[test]
     fn no_widows() {
         // 11 lines: the last would be alone on the next page, so two go over.
         let items = paragraph(0, 11);
-        assert_eq!(break_pages(&items, 100.0), [0, 9]);
+        assert_eq!(break_pages(&items, 100.0, None), [0, 9]);
         // 3-line paragraph after 8 lines: moving one line over would orphan
         // its first, so the whole paragraph goes.
         let mut items = paragraph(0, 8);
         items.extend(paragraph(1, 3));
-        assert_eq!(break_pages(&items, 100.0), [0, 8]);
+        assert_eq!(break_pages(&items, 100.0, None), [0, 8]);
     }
 
     #[test]
@@ -332,7 +368,7 @@ mod tests {
         items.extend(paragraph(2, 4));
         // The heading (with its space) fits as line 9, but its paragraph
         // wouldn't start before the page ends.
-        assert_eq!(break_pages(&items, 100.0), [0, 8]);
+        assert_eq!(break_pages(&items, 100.0, None), [0, 8]);
     }
 
     #[test]
@@ -341,7 +377,7 @@ mod tests {
         items.push(heading(1));
         items.extend(paragraph(2, 9));
         // The heading starts page two without its space, so all nine lines fit.
-        assert_eq!(break_pages(&items, 100.0), [0, 10]);
+        assert_eq!(break_pages(&items, 100.0, None), [0, 10]);
     }
 
     #[test]
@@ -349,13 +385,30 @@ mod tests {
         // Nothing but headings: the keep rule can't push the break back to the
         // start of the page.
         let items: Vec<Item> = (0..30).map(heading).collect();
-        let starts = break_pages(&items, 100.0);
+        let starts = break_pages(&items, 100.0, None);
         assert!(starts.windows(2).all(|w| w[0] < w[1]));
         // A single line taller than the page still gets a page.
         let mut tall = paragraph(0, 1);
         tall[0].height = 500.0;
         tall.extend(paragraph(1, 3));
-        assert_eq!(break_pages(&tall, 100.0), [0, 1]);
+        assert_eq!(break_pages(&tall, 100.0, None), [0, 1]);
+    }
+
+    #[test]
+    fn a_forced_start_begins_a_page_and_the_rest_follow_from_it() {
+        // Ten lines a page, in paragraphs of five. Forcing line 14 to the
+        // top leaves a short page before it, even though that leaves the
+        // paragraph's last line alone. After it the usual rules apply: 24
+        // would be a widow, so that page ends a line early.
+        let items: Vec<Item> = (0..6).flat_map(|b| paragraph(b, 5)).collect();
+        assert_eq!(break_pages(&items, 100.0, Some(14)), [0, 10, 14, 23]);
+        // Forcing a line that starts a page anyway changes nothing.
+        assert_eq!(
+            break_pages(&items, 100.0, Some(10)),
+            break_pages(&items, 100.0, None)
+        );
+        // Nor does forcing the first line.
+        assert_eq!(break_pages(&items, 100.0, Some(0)), [0, 10, 20]);
     }
 
     #[test]

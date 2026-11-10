@@ -241,10 +241,10 @@ pub struct Session<R> {
     last_touch: Instant,
     woke: Option<Instant>,
     background: Option<Background>,
-    /// Where the reader was when the layout was first changed since the
-    /// last turn. Each change finds the page from here, so stepping a
-    /// setting up and back down returns to the same page rather than
-    /// creeping back a page at a time.
+    /// Where the page started when the layout was first changed since the
+    /// last turn. Each change puts the line holding this at the top of the
+    /// page. That line can start a few words earlier, so starting from the
+    /// new page each time would creep back a line per step.
     anchor: Option<Position>,
 }
 
@@ -280,7 +280,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             offset: 0,
         });
         let settings = preferences.settings();
-        let (reader, background) = open_reader(&open, book_key, &settings, at, device)?;
+        let (reader, background) = open_reader(&open, book_key, &settings, at, false, device)?;
         let mut session = Self {
             open,
             book_key,
@@ -654,7 +654,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         self.anchor = Some(at);
         self.background = None;
         let settings = self.preferences.settings();
-        let (reader, background) = open_reader(&self.open, self.book_key, &settings, at, device)?;
+        let (reader, background) =
+            open_reader(&self.open, self.book_key, &settings, at, true, device)?;
         self.reader = reader;
         self.background = background;
         if matches!(self.mode, Mode::Menu(_)) {
@@ -665,18 +666,30 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
 }
 
 /// Opens the reader with its saved page map, and starts paginating the rest
-/// of the book in the background if the map isn't complete.
+/// of the book in the background if the map isn't complete. With `relayout`,
+/// the settings have just changed, and the line at `at` stays at the top of
+/// its page; see [`Reader::relayout`].
 fn open_reader<R: Read + Seek + Send + 'static>(
     open: &Opener<R>,
     book_key: u64,
     settings: &Settings,
     at: Position,
+    relayout: bool,
     device: &mut dyn Device,
 ) -> Result<(Reader<R>, Option<Background>), AppError> {
     let key = PageMap::key(book_key, settings);
     let cached: Option<PageMap> = load_json(device, &pages_file(key));
-    let reader = Reader::open(open()?, settings.clone(), book_key, at, cached)?;
+    let reader = if relayout {
+        Reader::relayout(open()?, settings.clone(), book_key, at, cached)?
+    } else {
+        Reader::open(open()?, settings.clone(), book_key, at, cached)?
+    };
     if reader.page_map().is_complete() {
+        if relayout {
+            // There's no background pagination to save it, and the page
+            // at `at` has moved from where a saved map has it.
+            save_json(device, &pages_file(key), reader.page_map());
+        }
         return Ok((reader, None));
     }
     let (send, receive) = mpsc::channel();
