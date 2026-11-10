@@ -102,12 +102,15 @@ pub struct Series {
 }
 
 /// `GET books/{id}` sends this file, with its revision in [`REVISION_HEADER`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BookFile {
     pub size: u64,
     /// Changes whenever the file is made again. A place taken in another
     /// revision may not point at the same words.
     pub revision: i64,
+    /// The file's SHA-256 in lower-case hex. A download that doesn't match
+    /// isn't used.
+    pub sha256: String,
 }
 
 /// The header a book download gives its file's revision in.

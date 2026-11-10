@@ -17,9 +17,10 @@ pub struct ReaderBook {
     pub series: Option<String>,
     pub series_index: Option<f64>,
     pub cover_id: Option<String>,
-    /// Both set once the reader file exists.
+    /// All set once the reader file exists.
     pub reader_size: Option<i64>,
     pub reader_revision: Option<i64>,
+    pub reader_sha256: Option<String>,
     pub added_at: i64,
 }
 
@@ -94,7 +95,8 @@ impl UserScope {
         let mut changes: Vec<(i64, ReaderChange)> = Vec::new();
         let books = sqlx::query!(
             r#"SELECT e.change_seq, b.id AS "id!", b.title, b.authors_json, b.series,
-                      b.series_index, b.cover_id, b.reader_size, b.reader_revision, e.added_at
+                      b.series_index, b.cover_id, b.reader_size, b.reader_revision, b.reader_sha256,
+                      e.added_at
                FROM library_entries e JOIN books b ON b.id = e.book_id
                WHERE e.user_id = ?1 AND e.change_seq > ?2 AND e.first_seq IS NOT NULL
                ORDER BY e.change_seq LIMIT ?3"#,
@@ -116,6 +118,7 @@ impl UserScope {
                     cover_id: r.cover_id,
                     reader_size: r.reader_size,
                     reader_revision: r.reader_revision,
+                    reader_sha256: r.reader_sha256,
                     added_at: r.added_at,
                 }),
             )

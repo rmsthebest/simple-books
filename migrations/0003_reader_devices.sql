@@ -4,6 +4,13 @@
 ALTER TABLE devices ADD COLUMN kind TEXT NOT NULL DEFAULT 'kobo'
     CHECK (kind IN ('kobo', 'reader'));
 
+-- The reader file's SHA-256, in hex, set with reader_size. A reader checks
+-- every download against it before using the file.
+ALTER TABLE books ADD COLUMN reader_sha256 TEXT;
+-- Files made before this have no hash, so they're made again, in the
+-- background, as after a converter upgrade. Until then a reader skips them.
+UPDATE books SET reader_revision = NULL;
+
 -- A reader waiting for someone to type its code on the website. The reader
 -- holds the secret and only its hash is here; when the code is entered, the
 -- hash becomes the new device's and this row goes.

@@ -41,13 +41,14 @@ fn book(row: ReaderBook) -> Book {
             name,
             index: row.series_index,
         }),
-        file: row
-            .reader_size
-            .zip(row.reader_revision)
-            .map(|(size, revision)| BookFile {
+        file: match (row.reader_size, row.reader_revision, row.reader_sha256) {
+            (Some(size), Some(revision), Some(sha256)) => Some(BookFile {
                 size: size.max(0) as u64,
                 revision,
+                sha256,
             }),
+            _ => None,
+        },
         cover: row.cover_id,
         added: row.added_at,
     }

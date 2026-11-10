@@ -130,22 +130,25 @@ impl Db {
         Ok(row.map_or(MAX_CONVERSION_ATTEMPTS, |row| row.attempts))
     }
 
-    /// Records that this revision is done with a book: `size` is the file's,
-    /// or `None` if converting it failed for good. Returns whether the book
-    /// still exists.
+    /// Records that this revision is done with a book: `file` is the file's
+    /// size and SHA-256, or `None` if converting it failed for good. Returns
+    /// whether the book still exists.
     pub async fn finish_reader_conversion(
         &self,
         book: Uuid,
         revision: i64,
-        size: Option<i64>,
+        file: Option<(i64, &str)>,
     ) -> Result<bool, sqlx::Error> {
         let id = book.to_string();
+        let (size, sha256) = file.unzip();
         let mut tx = self.write.begin().await?;
         let done = sqlx::query!(
-            "UPDATE books SET reader_revision = ?1, reader_size = ?2, reader_attempts = 0
-             WHERE id = ?3",
+            "UPDATE books SET reader_revision = ?1, reader_size = ?2, reader_sha256 = ?3,
+                              reader_attempts = 0
+             WHERE id = ?4",
             revision,
             size,
+            sha256,
             id
         )
         .execute(&mut *tx)
@@ -164,7 +167,8 @@ impl Db {
     pub async fn requeue_reader_conversion(&self, book: Uuid) -> Result<(), sqlx::Error> {
         let id = book.to_string();
         sqlx::query!(
-            "UPDATE books SET reader_revision = NULL, reader_size = NULL, reader_attempts = 0
+            "UPDATE books SET reader_revision = NULL, reader_size = NULL, reader_sha256 = NULL,
+                              reader_attempts = 0
              WHERE id = ?1",
             id
         )

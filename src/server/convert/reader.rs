@@ -14,6 +14,7 @@ use std::{
 };
 
 use book_format::{BookReader, FORMAT_VERSION, Limits};
+use sha2::{Digest, Sha256};
 use tokio::{process::Command, time::Instant};
 use uuid::Uuid;
 
@@ -42,10 +43,10 @@ pub async fn convert_next(state: &AppState, tools: &Tools) -> Result<bool, sqlx:
     let attempts = state.db.count_reader_attempt(book).await?;
 
     match attempt(state, tools, book).await {
-        Ok(size) => {
+        Ok((size, sha256)) => {
             if state
                 .db
-                .finish_reader_conversion(book, REVISION, Some(size))
+                .finish_reader_conversion(book, REVISION, Some((size, &sha256)))
                 .await?
             {
                 tracing::info!(
@@ -75,8 +76,12 @@ pub async fn convert_next(state: &AppState, tools: &Tools) -> Result<bool, sqlx:
 }
 
 /// Runs the child in a private scratch directory, checks what it made, and
-/// moves that into place. Returns its size.
-async fn attempt(state: &AppState, tools: &Tools, book: Uuid) -> Result<i64, AttemptError> {
+/// moves that into place. Returns its size and SHA-256.
+async fn attempt(
+    state: &AppState,
+    tools: &Tools,
+    book: Uuid,
+) -> Result<(i64, String), AttemptError> {
     let scratch = state.layout.tmp_dir().join(format!("reader-{book}"));
     let _ = tokio::fs::remove_dir_all(&scratch).await;
     create_private_dir(&scratch).await?;
@@ -106,13 +111,13 @@ async fn attempt(state: &AppState, tools: &Tools, book: Uuid) -> Result<i64, Att
         // The child's word isn't taken for it: the reader must be able to open
         // every part.
         let checked = output.clone();
-        tokio::task::spawn_blocking(move || check(&checked))
+        let sha256 = tokio::task::spawn_blocking(move || check(&checked))
             .await
             .map_err(|error| AttemptError::BadOutput(error.to_string()))?
             .map_err(AttemptError::BadOutput)?;
 
         install(&output, &state.layout.reader(book)).await?;
-        Ok(size)
+        Ok((size, sha256))
     }
     .await;
 
@@ -120,7 +125,13 @@ async fn attempt(state: &AppState, tools: &Tools, book: Uuid) -> Result<i64, Att
     result
 }
 
-fn check(path: &Path) -> Result<(), String> {
+/// Opens every part of the book, and returns the file's SHA-256 in hex.
+fn check(path: &Path) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    std::io::copy(&mut file, &mut hasher).map_err(|error| error.to_string())?;
+    let sha256 = hex::encode(hasher.finalize());
+
     let file = File::open(path).map_err(|error| error.to_string())?;
     let mut book =
         BookReader::open(BufReader::new(file), Limits::default()).map_err(|e| e.to_string())?;
@@ -130,7 +141,7 @@ fn check(path: &Path) -> Result<(), String> {
     for index in 0..book.manifest().images.len() {
         book.image(index).map_err(|error| error.to_string())?;
     }
-    Ok(())
+    Ok(sha256)
 }
 
 /// The arguments of the hidden `convert-book` command.

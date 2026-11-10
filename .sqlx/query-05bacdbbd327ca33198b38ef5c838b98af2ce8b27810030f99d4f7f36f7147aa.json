@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE books SET reader_revision = ?1, reader_size = ?2, reader_sha256 = ?3,\n                              reader_attempts = 0\n             WHERE id = ?4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "05bacdbbd327ca33198b38ef5c838b98af2ce8b27810030f99d4f7f36f7147aa"
+}

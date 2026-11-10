@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT e.change_seq, b.id AS \"id!\", b.title, b.authors_json, b.series,\n                      b.series_index, b.cover_id, b.reader_size, b.reader_revision, e.added_at\n               FROM library_entries e JOIN books b ON b.id = e.book_id\n               WHERE e.user_id = ?1 AND e.change_seq > ?2 AND e.first_seq IS NOT NULL\n               ORDER BY e.change_seq LIMIT ?3",
+  "query": "SELECT e.change_seq, b.id AS \"id!\", b.title, b.authors_json, b.series,\n                      b.series_index, b.cover_id, b.reader_size, b.reader_revision, b.reader_sha256,\n                      e.added_at\n               FROM library_entries e JOIN books b ON b.id = e.book_id\n               WHERE e.user_id = ?1 AND e.change_seq > ?2 AND e.first_seq IS NOT NULL\n               ORDER BY e.change_seq LIMIT ?3",
   "describe": {
     "columns": [
       {
@@ -103,8 +103,19 @@
         }
       },
       {
-        "name": "added_at",
+        "name": "reader_sha256",
         "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "reader_sha256"
+          }
+        }
+      },
+      {
+        "name": "added_at",
+        "ordinal": 10,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -127,8 +138,9 @@
       true,
       true,
       true,
+      true,
       false
     ]
   },
-  "hash": "e6c7a7a6d317f019b8d201acbac7b5f9a639eb8801e5faf60fc479737d00e5e2"
+  "hash": "f68ad7a4b54d01670fc024855fa736a28f50b0408766dd0afb313adb9e718428"
 }

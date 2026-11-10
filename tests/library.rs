@@ -21,7 +21,7 @@ use image::{ImageEncoder, Rgb, RgbImage, codecs::png::PngEncoder};
 use serde_json::{Value, json};
 use simple_books::server::{
     convert::{self, Tools, convert_next, reader},
-    db::scope::UserScope,
+    db::{reader::ReaderChange, scope::UserScope},
     storage::reconcile,
 };
 use uuid::Uuid;
@@ -1573,6 +1573,18 @@ async fn books_are_converted_for_the_reader_after_their_kepub() {
         .permissions()
         .mode();
     assert_eq!(mode & 0o777, 0o600);
+
+    // Readers check what they download against its hash.
+    let changes = scope.reader_changes(0, 10).await.unwrap();
+    let Some((_, ReaderChange::Book(listed))) = changes.changes.first() else {
+        panic!("the book should be listed");
+    };
+    let bytes = fs::read(layout.reader(id)).unwrap();
+    assert_eq!(
+        listed.reader_sha256.as_deref(),
+        Some(hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes)).as_str())
+    );
+    assert_eq!(listed.reader_size, Some(bytes.len() as i64));
 
     assert_eq!(drain_reader(&server, &working()).await, 0, "done once");
     let synced = server.sync(&token, None).await.json();

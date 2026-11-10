@@ -306,6 +306,11 @@ async fn changes(server: &TestServer, secret: &str, since: i64) -> Changes {
     serde_json::from_slice(&reply.body).unwrap()
 }
 
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
 /// Pretends the background conversion made the book's reader file.
 async fn convert(server: &TestServer, book: Uuid, bytes: &[u8]) {
     let path = server.state.layout.reader(book);
@@ -314,7 +319,7 @@ async fn convert(server: &TestServer, book: Uuid, bytes: &[u8]) {
         server
             .state
             .db
-            .finish_reader_conversion(book, REVISION, Some(bytes.len() as i64))
+            .finish_reader_conversion(book, REVISION, Some((bytes.len() as i64, &sha256(bytes))))
             .await
             .unwrap()
     );
@@ -373,9 +378,10 @@ async fn a_reader_gets_books_once_they_are_converted() {
     convert(&server, book, b"the book's bytes").await;
     let second = changes(&server, &secret, first.next).await;
     assert!(!second.full);
-    let file = second.books[0].file.unwrap();
+    let file = second.books[0].file.clone().unwrap();
     assert_eq!(file.size, 16);
     assert_eq!(file.revision, REVISION);
+    assert_eq!(file.sha256, sha256(b"the book's bytes"));
 
     let reply = call(
         &server,
