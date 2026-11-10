@@ -20,7 +20,8 @@ use crate::log;
 /// Nickel's settings, which say which server the Kobo syncs with.
 const NICKEL_CONF: &str = "/mnt/onboard/.kobo/Kobo/Kobo eReader.conf";
 /// The server's address, put in the app folder by hand. Used first.
-const SERVER_FILE: &str = "server.txt";
+/// No extension: Nickel would list a `.txt` as a book.
+const SERVER_FILE: &str = "server";
 /// The longest a script may take. `wifi.sh up` gives up after about a
 /// minute.
 const RUN_LIMIT: Duration = Duration::from_secs(180);
@@ -232,7 +233,7 @@ pub(crate) fn run(script: &Path, action: &str) -> Result<String, String> {
     }
 }
 
-/// The server to sync with: from `server.txt` in the app folder, or else
+/// The server to sync with: from `server` in the app folder, or else
 /// the one Nickel syncs with. Only the address is kept, never the token
 /// in Nickel's.
 pub(crate) fn server(dir: &Path) -> Option<String> {

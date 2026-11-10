@@ -1,5 +1,10 @@
 # KOReader on a Kobo Clara BW, firmware 6.0.279225
 
+> **History.** Simple Books doesn't need KOReader or Nickelite: it installs from the
+> website and brings its own Nickel plugin and SSH server (see
+> [`reader-kobo.md`](reader-kobo.md)). This is how the device was first reached, and
+> where `kobo/reader.sh` and `kobo/wifi.sh` were adapted from.
+
 Unpatched KOReader runs on this device but can't exit back to Nickel. Three files
 from [idetedi's fork](https://github.com/idetedi/koreader) fix that. Tested on one
 physical Clara BW on 2026-11-09.

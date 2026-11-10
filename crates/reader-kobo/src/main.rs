@@ -35,7 +35,7 @@
 //!   logged for now, since what they mean isn't confirmed.
 //! - **Light, battery and sleep:** sysfs, as recorded in
 //!   `docs/clara-bw-hardware.md`.
-//! - **Sync:** with the server Nickel syncs with, or the one in `server.txt`
+//! - **Sync:** with the server Nickel syncs with, or the one in `server`
 //!   in the app folder. Wi-Fi is on only while a sync, a pairing or SSH
 //!   needs it, through `wifi.sh` (see [`online`]). It syncs at start, on
 //!   Sync now, and on waking every half hour.

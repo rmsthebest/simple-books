@@ -56,6 +56,11 @@ and tap sync.
 
 New books appear in My Books after a sync, and download when you first tap them.
 
+Or, on a Kobo Clara BW, install Simple Books' own reader in its place: choose "Install
+Simple Books on your Kobo" on the same page, in Chrome or Edge. It brings its own home
+screen with no ads, fast page turns and sync. The Kobo's own software stays, and
+Simple Books can uninstall itself. See [docs/reader-kobo.md](docs/reader-kobo.md).
+
 ## Hardcover
 
 Hardcover is off until the server has a Hardcover client ID. To turn it on:
@@ -85,7 +90,8 @@ Needs Rust (see `rust-version` in `Cargo.toml`), the `wasm32-unknown-unknown` ta
 
 ```sh
 cargo leptos build --release
-scripts/check.sh   # formatting, lints, tests and dependency audits
+scripts/build-kobo-files.sh   # the Kobo reader, for the installer; needs clang and llvm
+scripts/check.sh              # formatting, lints, tests and dependency audits
 ```
 
 The [`Dockerfile`](Dockerfile) builds the same image as the releases.

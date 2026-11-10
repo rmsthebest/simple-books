@@ -27,7 +27,7 @@ use crate::server::{
 pub const READER_NAME: &str = "Kobo Clara BW";
 
 /// The answer to `POST /device/kobo-install`: what the installer writes
-/// into the reader's folder, as `sync-secret` and `server.txt`.
+/// into the reader's folder, as `sync-secret` and `server`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Installed {
     pub secret: String,

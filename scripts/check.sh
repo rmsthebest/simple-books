@@ -36,7 +36,6 @@ sh scripts/build-kobo-plugin.sh >/dev/null
 
 step "launch scripts parse"
 sh -n kobo/reader.sh
-sh -n kobo/ssh.sh
 sh -n kobo/wifi.sh
 sh -n kobo/boot.sh
 sh -n kobo/boot-install.sh

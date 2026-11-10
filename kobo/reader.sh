@@ -1,6 +1,8 @@
 #!/bin/sh
-# Starts the simple-books reader from Nickelite in place of Nickel, and
-# always brings Nickel back when the reader exits, however it exits.
+# Starts the simple-books reader in place of a running Nickel, and always
+# brings Nickel back when the reader exits, however it exits. The helper
+# our Nickel plugin starts runs it (`reader-kobo --in-nickel`), after a
+# web install and when a computer is unplugged.
 #
 # Adapted from KOReader's platform/kobo/koreader.sh and nickel.sh
 # (AGPL-3.0), with the firmware 6 fixes from idetedi's fork recorded in

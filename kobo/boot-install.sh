@@ -1,6 +1,7 @@
 #!/bin/sh
-# Turns booting into the simple-books reader on and off: the Boot into
-# Simple Books and Boot into Nickel entries in Nickelite.
+# Turns booting into the simple-books reader on and off: the toggle on the
+# reader's Kobo screen, and the website's installer, through the helper
+# our Nickel plugin starts (`reader-kobo --in-nickel`).
 #
 #   boot-install.sh on    adds one line to /etc/rc.local, and creates `boot`
 #   boot-install.sh off   removes `boot`, and puts back the stock rc.local
@@ -10,7 +11,7 @@
 # fail: if boot.sh is missing it does nothing, and Nickel starts as always.
 # Only an rc.local with a known hash is changed, and the copy kept on
 # /mnt/aux has to match one too, so nothing else is ever written there.
-# What it did is printed, for Nickelite's message box.
+# What it did is printed, for the reader's Kobo screen and reader.log.
 #
 # RC_LOCAL, SAVED, APP_DIR and KNOWN_RC_LOCAL are for tests. See
 # docs/reader-kobo.md.

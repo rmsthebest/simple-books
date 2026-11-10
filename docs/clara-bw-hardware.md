@@ -41,8 +41,9 @@ reader. Secrets such as Wi-Fi passwords and tokens were deliberately not read.
    boot counter (see the warning below).
 3. `S99ota` installs updates:
    - **`.kobo/Kobo.tgz`:** for each file in the archive, it deletes the existing file
-     in `/usr/local/Kobo`, then unpacks the archive there. This is how Nickelite gets
-     installed. Firmware 6 doesn't use `KoboRoot.tgz`.
+     in `/usr/local/Kobo`, then unpacks the archive there, and deletes the archive. It
+     can't write anywhere else. This is how our Nickel plugin is installed, and how
+     Nickelite is. Firmware 6 doesn't use `KoboRoot.tgz`.
    - **`.kobo/update.tar`:** a full firmware update, which reboots into the recovery
      partition.
 4. Runlevel 5 ends with `/etc/rc.local`. It starts dbus, pulseaudio, speech-dispatcher,
@@ -86,9 +87,20 @@ append them to `/run/kobo/udev/backlog`, which is capped at 512 KB. So nothing b
 while Nickel is away, and `udev-sync.sh` replays the backlog once Nickel is back.
 
 **Started by Nickel, not `rc.local`:** `sickel` (through `sickel-launcher.sh`),
-`fontickel`, `wmt_launcher` and the QtWebEngine processes. Nickelite (`libnm.so` in
-`/usr/local/Kobo/imageformats`) has menu entries and generators but no way to run
-anything when Nickel starts.
+`fontickel`, `wmt_launcher` and the QtWebEngine processes.
+
+**Code inside Nickel.** Nickel is Qt 6.5.2, linked against glibc 2.35 (armhf, EABI5
+hard float), and runs as root. Qt loads every library in
+`/usr/local/Kobo/imageformats/` when it lists the image formats it can read, early in
+Nickel's start, and loading one runs its constructors (`.init_array`). Qt finds a
+plugin's metadata in an ELF note before loading it: section `.note.qt.metadata`, note
+name `qt-project!`, type `0x74510001`, and a description of the header `01 06 05 80`
+(metadata version 1, Qt 6.5) followed by CBOR `{2: IID, 3: class name, 4: {"Keys":
+[...]}}`, with the IID `org.qt-project.Qt.QImageIOHandlerFactoryInterface`. It also calls
+the plugin's `qt_plugin_query_metadata_v2` and `qt_plugin_instance`. NickelHook plugins
+such as Nickelite (`libnm.so`) work this way, and so does our `libsimplebooks.so`
+(`crates/kobo-plugin`), whose only job is to start a helper. See
+[`reader-kobo.md`](reader-kobo.md#how-its-started).
 
 **Wi-Fi before Nickel.** Nickel brings the MediaTek chip up when it starts (the strings
 are in `libnickel.so`): it loads `wmt_drv.ko`, `wmt_chrdev_wifi.ko` and `wmt_cdev_bt.ko`

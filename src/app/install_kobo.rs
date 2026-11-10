@@ -213,7 +213,7 @@ mod browser {
                 .map_err(|_| "This site's answer didn't make sense. Try again.".to_owned())?;
             let server = format!("{}\n", installed.server);
             for (name, bytes) in [
-                ("server.txt", server.as_bytes()),
+                ("server", server.as_bytes()),
                 ("sync-secret", installed.secret.as_bytes()),
             ] {
                 if !write_file(&app, name, bytes).await.map_err(describe)? {

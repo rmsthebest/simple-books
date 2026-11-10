@@ -173,9 +173,9 @@ impl Layout {
             View::NoServer => say(
                 canvas,
                 ui,
-                "This reader doesn't know which server to sync with. Connect it to your server \
-                 from the website's Kobo page first, or put the server's address in server.txt \
-                 in the reader's folder.",
+                "This reader doesn't know which server to sync with. Install it from your \
+                 server's device page, or put the server's address in a file called server in \
+                 the reader's folder.",
                 y,
             ),
             View::Unpaired { server } => {
