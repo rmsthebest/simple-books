@@ -10,7 +10,8 @@
 //!
 //! - Click the left third of the page, or press ←, Page Up or Backspace, to
 //!   go back. Click elsewhere, or press →, Page Down or Space, to go forward.
-//! - `+` and `-` change the text size, `H` hyphenation and `J` justification.
+//! - `+` and `-` change the text size, `H` toggles hyphenation, `J`
+//!   justification and `K` Knuth–Plass line breaking.
 //! - `Q` or Esc quits.
 //!
 //! A turn shows the new page only after the panel's refresh time from
@@ -107,6 +108,10 @@ fn main() {
                     settings.justify = !settings.justify;
                     changed = Some(settings.font_size);
                 }
+                Key::K => {
+                    settings.optimal_breaks = !settings.optimal_breaks;
+                    changed = Some(settings.font_size);
+                }
                 _ => {}
             }
         }
@@ -129,8 +134,8 @@ fn main() {
             cache.save(&app.reader);
             app = App::open(&bytes, book_key, &cache, settings.clone(), Some(at));
             println!(
-                "text {} px, hyphenation {}, justified {}",
-                settings.font_size, settings.hyphenate, settings.justify
+                "text {} px, hyphenation {}, justified {}, Knuth–Plass {}",
+                settings.font_size, settings.hyphenate, settings.justify, settings.optimal_breaks
             );
         } else if let Some(turn) = turn {
             app.turn(turn, now);

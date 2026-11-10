@@ -18,6 +18,7 @@
 mod canvas;
 mod fonts;
 mod guard;
+mod knuth_plass;
 mod paginate;
 mod reader;
 mod render;
@@ -33,7 +34,7 @@ pub use typeset::Typesetter;
 
 /// Bumped whenever a change here would put page breaks somewhere else, so
 /// page maps cached on disk are made again.
-pub const LAYOUT_VERSION: u32 = 1;
+pub const LAYOUT_VERSION: u32 = 2;
 
 /// How pages look. Everything that changes where lines break is in here, and
 /// [`Settings::cache_key`] covers all of it.
@@ -55,6 +56,9 @@ pub struct Settings {
     pub justify: bool,
     /// Break words at the soft hyphens the server put in.
     pub hyphenate: bool,
+    /// Choose a justified paragraph's line breaks together, with Knuth and
+    /// Plass's method, rather than filling each line in turn.
+    pub optimal_breaks: bool,
 }
 
 impl Default for Settings {
@@ -71,6 +75,7 @@ impl Default for Settings {
             line_height: 1.4,
             justify: true,
             hyphenate: true,
+            optimal_breaks: true,
         }
     }
 }
@@ -93,7 +98,11 @@ impl Settings {
         for value in [self.dpi, self.font_size, self.line_height] {
             hash.write(&value.to_bits().to_le_bytes());
         }
-        hash.write(&[u8::from(self.justify), u8::from(self.hyphenate)]);
+        hash.write(&[
+            u8::from(self.justify),
+            u8::from(self.hyphenate),
+            u8::from(self.optimal_breaks),
+        ]);
         hash.0
     }
 

@@ -17,7 +17,7 @@ use parley::{
 };
 use skrifa::{FontRef, MetadataProvider, instance::Size};
 
-use crate::{Canvas, Settings, fonts, render::Glyphs};
+use crate::{Canvas, Settings, fonts, knuth_plass, render::Glyphs};
 
 /// A typographic point in inches.
 const POINT: f32 = 1.0 / 72.0;
@@ -88,6 +88,8 @@ pub struct Typesetter {
     /// For each line in `layout`, whether it ends at a soft hyphen.
     hyphens: Vec<bool>,
     current: Option<Current>,
+    /// Whether the block in `layout` was broken with Knuth–Plass.
+    optimal: bool,
     hyphen_em: f32,
     glyphs: Glyphs,
 }
@@ -116,6 +118,7 @@ impl Typesetter {
             text: String::new(),
             hyphens: Vec::new(),
             current: None,
+            optimal: false,
             hyphen_em,
             glyphs: Glyphs::default(),
         }
@@ -402,13 +405,35 @@ impl Typesetter {
             .set_text_indent(style.first_line_indent, IndentOptions::default());
 
         let width = (s.content_width() - style.inset).max(size);
-        self.break_lines(width, size, has_hyphens);
+        let hyphen = self.hyphen_em * size;
+        let optimal = s.optimal_breaks
+            && style.alignment == Alignment::Justify
+            && !style.preformatted
+            && knuth_plass::break_layout(
+                &mut self.layout,
+                &self.text,
+                width,
+                style.first_line_indent,
+                hyphen,
+            );
+        self.optimal = optimal;
+        if optimal {
+            let text = &self.text;
+            self.hyphens.clear();
+            self.hyphens.extend(
+                self.layout
+                    .lines()
+                    .map(|line| text[..line.text_range().end].ends_with(SOFT_HYPHEN)),
+            );
+        } else {
+            self.break_lines(width, size, has_hyphens);
+        }
         self.layout
             .align(style.alignment, AlignmentOptions::default());
     }
 
-    /// Breaks the block into lines `width` wide, leaving room for the hyphen
-    /// on lines that end at a soft hyphen.
+    /// Breaks the block into lines `width` wide one line at a time, leaving
+    /// room for the hyphen on lines that end at a soft hyphen.
     fn break_lines(&mut self, width: f32, size: f32, has_hyphens: bool) {
         self.hyphens.clear();
         if has_hyphens {
@@ -566,6 +591,22 @@ mod tests {
         }
     }
 
+    /// Where each line's ink ends, as drawn: the end of its last glyph run.
+    fn line_ends(typesetter: &Typesetter) -> Vec<f32> {
+        typesetter
+            .layout
+            .lines()
+            .map(|line| {
+                line.items()
+                    .filter_map(|item| match item {
+                        PositionedLayoutItem::GlyphRun(run) => Some(run.offset() + run.advance()),
+                        PositionedLayoutItem::InlineBox(_) => None,
+                    })
+                    .fold(0.0, f32::max)
+            })
+            .collect()
+    }
+
     fn lay_out(settings: Settings) -> (Typesetter, Placed) {
         let mut typesetter = Typesetter::new(settings, Some("en"));
         let chapter = hyphenated_chapter();
@@ -610,6 +651,81 @@ mod tests {
                 .all(|line| [0, 2, 5, 7, 9].contains(&(line.offset % 14)))
         );
         assert!(placed.lines.iter().any(|line| line.offset % 14 != 0));
+    }
+
+    #[test]
+    fn justified_lines_end_at_the_margin() {
+        for optimal_breaks in [true, false] {
+            let settings = Settings {
+                optimal_breaks,
+                ..Settings::default()
+            };
+            let width = settings.content_width();
+            let (typesetter, _) = lay_out(settings);
+            assert_eq!(typesetter.optimal, optimal_breaks);
+            let hyphen = typesetter.hyphen_em * typesetter.settings.font_size;
+            let ends = line_ends(&typesetter);
+            // Every line but the last is justified, ending exactly at the
+            // margin, or a hyphen short of it.
+            for (end, hyphenated) in ends[..ends.len() - 1].iter().zip(&typesetter.hyphens) {
+                let target = if *hyphenated { width - hyphen } else { width };
+                assert!(
+                    (end - target).abs() < 0.5,
+                    "optimal {optimal_breaks}: a line ends at {end}, not {target}"
+                );
+            }
+            assert!(ends.last().unwrap() < &width);
+        }
+    }
+
+    #[test]
+    fn optimal_breaks_are_less_loose() {
+        // Ordinary prose, where filling each line leaves some loose ones.
+        let text = "It was a bright cold day in April, and the clocks were striking \
+            thirteen. Winston Smith, his chin nuzzled into his breast in an effort \
+            to escape the vile wind, slipped quickly through the glass doors of \
+            Victory Mansions, though not quickly enough to prevent a swirl of \
+            gritty dust from entering along with him. The hallway smelt of boiled \
+            cabbage and old rag mats. At one end of it a coloured poster, too \
+            large for indoor display, had been tacked to the wall.";
+        let loosest = |optimal_breaks| {
+            let settings = Settings {
+                optimal_breaks,
+                hyphenate: false,
+                ..Settings::default()
+            };
+            let mut typesetter = Typesetter::new(settings, Some("en"));
+            let chapter = Chapter {
+                blocks: vec![Block {
+                    kind: BlockKind::Paragraph {
+                        indent_first: false,
+                    },
+                    indent: 0,
+                    align: Align::Default,
+                    spans: vec![Span::plain(text)],
+                }],
+            };
+            let at = ChapterRef {
+                index: 0,
+                chapter: &chapter,
+                images: &[],
+            };
+            typesetter.block(at, 0);
+            assert_eq!(typesetter.optimal, optimal_breaks);
+            // The widest gap Parley added to any line but the last.
+            let lines: Vec<_> = typesetter.layout.lines().collect();
+            lines[..lines.len() - 1]
+                .iter()
+                .map(|line| {
+                    let m = line.metrics();
+                    let spaces = text[line.text_range()].trim_end().matches(' ').count();
+                    (m.inline_max_coord - m.inline_min_coord - m.advance + m.hanging_advance)
+                        / spaces.max(1) as f32
+                })
+                .fold(0.0, f32::max)
+        };
+        let (optimal, greedy) = (loosest(true), loosest(false));
+        assert!(optimal < greedy, "optimal {optimal} px, greedy {greedy} px");
     }
 
     #[test]

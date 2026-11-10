@@ -2,8 +2,11 @@
 //! and get a per-page budget to check on the device.
 //!
 //! ```sh
-//! cargo run --release -p reader-core --example pages -- book.epub [out-dir] [pages]
+//! cargo run --release -p reader-core --example pages -- book.epub [out-dir] [pages] [--greedy]
 //! ```
+//!
+//! `--greedy` fills each line in turn instead of choosing breaks with
+//! Knuth–Plass, to compare the two.
 //!
 //! Takes an EPUB (converted here, as the server would) or a converted book.
 #![allow(clippy::cast_precision_loss, reason = "timings")]
@@ -19,7 +22,9 @@ use book_format::{BookReader, Limits, Position};
 use reader_core::{PageMap, Reader, Settings, Turn, paginate_book};
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let greedy = args.iter().any(|a| a == "--greedy");
+    args.retain(|a| a != "--greedy");
     let input = PathBuf::from(&args[0]);
     let out = args.get(1).map(PathBuf::from);
     let wanted: usize = args.get(2).and_then(|n| n.parse().ok()).unwrap_or(12);
@@ -37,7 +42,10 @@ fn main() {
         bytes = converted.into_inner();
     }
     let open = || BookReader::open(Cursor::new(bytes.clone()), Limits::default()).unwrap();
-    let settings = Settings::default();
+    let settings = Settings {
+        optimal_breaks: !greedy,
+        ..Settings::default()
+    };
 
     // The whole book, as the background thread would do it.
     let mut book = open();
