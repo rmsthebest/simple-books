@@ -1,3 +1,5 @@
 menu_item:main:Simple Books:cmd_spawn:quiet:exec /mnt/onboard/.adds/simple-books/reader.sh
 menu_item:main:SSH on:cmd_spawn:quiet:exec /mnt/onboard/.adds/simple-books/ssh.sh start
 menu_item:main:SSH off:cmd_spawn:quiet:exec /mnt/onboard/.adds/simple-books/ssh.sh stop
+menu_item:main:Boot into Simple Books:cmd_output:5000:/mnt/onboard/.adds/simple-books/boot-install.sh on
+menu_item:main:Boot into Nickel:cmd_output:5000:/mnt/onboard/.adds/simple-books/boot-install.sh off

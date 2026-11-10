@@ -1,8 +1,9 @@
 # The simple-books reader on a Kobo Clara BW
 
 The reader runs as an app launched from Nickelite, the way KOReader does: it stops
-Nickel, takes over the screen, and starts Nickel again when you leave it. Nickel stays
-installed and untouched. It reads books in the reader's own format (`.book`), and
+Nickel, takes over the screen, and starts Nickel again when you leave it. It can also
+start when the Kobo is switched on, before Nickel (see [Booting into the
+reader](#booting-into-the-reader)). Nickel stays installed and untouched. It reads books in the reader's own format (`.book`), and
 starts on its own home screen with a library list, search and settings. Paired with the
 website, it gets its books from the server and keeps your place in them across readers.
 
@@ -17,7 +18,9 @@ KOReader in [`koreader-clara-bw.md`](koreader-clara-bw.md).
 | `.adds/simple-books/reader.sh` | `kobo/reader.sh` | Stops Nickel, runs the reader, starts Nickel again |
 | `.adds/simple-books/ssh.sh` | `kobo/ssh.sh` | Starts and stops an SSH server, from Nickel or the reader |
 | `.adds/simple-books/wifi.sh` | `kobo/wifi.sh` | Turns Wi-Fi on and off for the reader |
-| `.adds/nm/simple-books` | `kobo/nickelite-menu` | The **Simple Books**, **SSH on** and **SSH off** entries in the Nickelite tab |
+| `.adds/simple-books/boot.sh` | `kobo/boot.sh` | Runs the reader at boot, before Nickel, once booting into it is on |
+| `.adds/simple-books/boot-install.sh` | `kobo/boot-install.sh` | Turns booting into the reader on and off |
+| `.adds/nm/simple-books` | `kobo/nickelite-menu` | The **Simple Books**, **SSH on**, **SSH off**, **Boot into Simple Books** and **Boot into Nickel** entries in the Nickelite tab |
 | `.adds/simple-books/books/*.book` | made by the server, or by hand (below) | Books, on the home screen |
 
 The reader also writes, in `.adds/simple-books/`:
@@ -36,7 +39,10 @@ The reader also writes, in `.adds/simple-books/`:
 - `sync-status.json`: who it's paired with and how the last sync went;
 - `books/{id}.book`, and `{id}.part` while downloading: books from the server;
 - `reader.log`: what happened, including anything that took over 300 ms, such as opening
-  a book; cut back once it passes 1 MB.
+  a book, and how each sync ended; cut back once it passes 1 MB;
+- `boot`: there while booting into the reader is on;
+- `boot-started`: there from when `boot.sh` starts the reader until it reaches home or
+  returns.
 
 Nickel doesn't list anything under `.adds`, given the `ExcludeSyncFolders` line from the
 KOReader setup.
@@ -126,6 +132,39 @@ there's no need to open KOReader to reach the Kobo. Wi-Fi has to be on in Nickel
 - **SSH off** stops it. Starting the reader stops it too, since the reader turns Wi-Fi
   off, and so does restarting the Kobo.
 
+## Booting into the reader
+
+**Boot into Simple Books** in the Nickelite tab makes the reader start when the Kobo is
+switched on, before Nickel. **Boot into Nickel** puts things back as they were. Each one
+shows a message saying what it did.
+
+- **How it works:** the Kobo's `/etc/rc.local` starts a few services and then Nickel.
+  **Boot into Simple Books** adds one line to it, just after the boot animation is
+  stopped, which runs `boot.sh`. `boot.sh` runs the reader, and when the reader exits,
+  for whatever reason, `rc.local` goes on to start Nickel just as it always does.
+  Leaving the reader for Nickel, from its menu or by holding the power button, works
+  the same as before.
+- **Safety:**
+  - Only an `rc.local` whose SHA-256 is known is changed, and a copy of it is kept in
+    `/mnt/aux/simple-books/rc.local.orig`. Taking the line out has to give back exactly
+    the original, or nothing is written.
+  - `rc.local` runs with `sh -e`, so the line can't fail: if `boot.sh` is missing, it
+    does nothing.
+  - A firmware update replaces `rc.local`, so after one the Kobo starts Nickel until
+    **Boot into Simple Books** is used again. It refuses if the new `rc.local` isn't one
+    it knows.
+- **Starting Nickel instead, once:** keep a finger on the screen while the Kobo starts,
+  until Nickel appears.
+- **If the reader hangs at boot:** hold the power button until the Kobo restarts. The
+  next boot is Nickel's, since `boot-started` shows that the last one never reached the
+  reader's home screen. The boot after that tries the reader again.
+- **Turning it off over USB:** delete `.adds/simple-books/boot`. The line stays in
+  `rc.local`, but `boot.sh` then returns at once.
+- **The boot counter:** the Kobo offers a factory reset after four boots in a row that
+  didn't finish, and normally Nickel tells it each boot finished. When the reader starts
+  at boot it does that instead, once its home screen is up. See
+  [`clara-bw-hardware.md`](clara-bw-hardware.md).
+
 ## If something goes wrong
 
 - **It shows an error or nothing happens:** `reader.sh` starts Nickel again whenever the
@@ -133,7 +172,11 @@ there's no need to open KOReader to reach the Kobo. Wi-Fi has to be on in Nickel
 - **Taps do nothing:** hold the power button for 3 seconds and let go. The reader leaves
   for Nickel, saving the place.
 - **The screen freezes:** hold the power button until the Kobo restarts. Nickel starts as
-  usual. This didn't erase anything in the KOReader tests.
+  usual, even when booting into the reader is on. This didn't erase anything in the
+  KOReader tests.
 - **Sync fails:** the Sync screen says what went wrong. "Couldn't reach the server" with
   Wi-Fi working may mean the Kobo's clock is wrong, which breaks HTTPS.
-- **Remove it:** delete `.adds/simple-books` and `.adds/nm/simple-books` over USB.
+- **Remove it:** use **Boot into Nickel** first, if booting into the reader is on, then
+  delete `.adds/simple-books` and `.adds/nm/simple-books` over USB. Deleting them
+  without that is safe too, since the line left in `rc.local` does nothing without
+  `boot.sh`.

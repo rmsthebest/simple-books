@@ -94,6 +94,18 @@ if pkill -0 nickel; then
         QtWebEngineProcess
     wait_for_exit nickel
     rm -f /tmp/nickel-hardware-status /run/kobo/udev/fifo
+    # Bringing Nickel back runs rc.local again, which starts a new session
+    # bus, and the new Nickel starts another wmt_launcher. Without this,
+    # every trip to the reader left one of each behind. The system bus
+    # stays, and so does the first wmt_launcher, for the Wi-Fi chip.
+    for pid in $(pidof dbus-daemon); do
+        if grep -q -- --session "/proc/${pid}/cmdline" 2>/dev/null; then
+            kill "${pid}"
+        fi
+    done
+    for pid in $(pidof wmt_launcher | tr ' ' '\n' | sort -n | sed 1d); do
+        kill "${pid}"
+    done
     # Wi-Fi is going off, so an SSH server started from Nickelite has no
     # more use. The reader can start its own.
     "${APP_DIR}/ssh.sh" stop

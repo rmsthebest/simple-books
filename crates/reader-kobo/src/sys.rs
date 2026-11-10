@@ -27,6 +27,9 @@ const HWTCON_SEND_UPDATE: u32 = ioc(IOC_WRITE, b'F', 0x2E, size_of::<UpdateData>
 const HWTCON_WAIT_FOR_UPDATE_COMPLETE: u32 =
     ioc(IOC_READ | IOC_WRITE, b'F', 0x2F, size_of::<UpdateMarker>());
 const EVIOCGRAB: u32 = ioc(IOC_WRITE, b'E', 0x90, size_of::<libc::c_int>());
+/// Bytes in a key bitmap: one bit for each code up to `KEY_MAX`, 0x2ff.
+const KEY_BYTES: usize = 0x300 / 8;
+const EVIOCGKEY: u32 = ioc(IOC_READ, b'E', 0x18, KEY_BYTES);
 
 /// `struct hwtcon_update_data`.
 #[repr(C)]
@@ -373,6 +376,17 @@ pub(crate) fn grab(device: &File) -> io::Result<()> {
     check(unsafe { libc::ioctl(device.as_raw_fd(), request(EVIOCGRAB), on) })
 }
 
+/// Whether key or button `code` on an input device is down now.
+pub(crate) fn key_down(device: &File, code: u16) -> io::Result<bool> {
+    let mut keys = [0u8; KEY_BYTES];
+    // SAFETY: EVIOCGKEY writes at most its size, KEY_BYTES, into `keys`.
+    check(unsafe { libc::ioctl(device.as_raw_fd(), request(EVIOCGKEY), keys.as_mut_ptr()) })?;
+    let code = usize::from(code);
+    Ok(keys
+        .get(code / 8)
+        .is_some_and(|byte| byte & (1 << (code % 8)) != 0))
+}
+
 /// Waits until one of `files` can be read, or `timeout` passes. Returns
 /// which are readable.
 pub(crate) fn poll(files: &[BorrowedFd<'_>], timeout: Duration) -> io::Result<Vec<bool>> {
@@ -436,6 +450,7 @@ mod tests {
         assert_eq!(HWTCON_SEND_UPDATE, 0x4024_462E);
         assert_eq!(HWTCON_WAIT_FOR_UPDATE_COMPLETE, 0xC008_462F);
         assert_eq!(EVIOCGRAB, 0x4004_4590);
+        assert_eq!(EVIOCGKEY, 0x8060_4518);
     }
 
     #[test]

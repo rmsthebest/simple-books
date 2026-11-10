@@ -61,6 +61,12 @@ up() {
             return 1
         fi
     done
+    # Nickel starts this, so it isn't running yet when the reader starts at
+    # boot. It looks after the Wi-Fi and Bluetooth chip.
+    if ! pkill -0 wmt_launcher; then
+        quiet wmt_launcher -p /lib/firmware &
+        sleep 2
+    fi
     # As Nickel does: the driver's debug interface, then power on.
     echo "0xDB9DB9" >/proc/driver/wmt_dbg
     echo "7 9 0" >/proc/driver/wmt_dbg

@@ -17,7 +17,7 @@ pub(crate) const EV_ABS: u16 = 3;
 const SYN_REPORT: u16 = 0;
 const ABS_MT_POSITION_X: u16 = 0x35;
 const ABS_MT_POSITION_Y: u16 = 0x36;
-const BTN_TOUCH: u16 = 0x14a;
+pub(crate) const BTN_TOUCH: u16 = 0x14a;
 pub(crate) const KEY_POWER: u16 = 116;
 
 /// The kernel's `struct input_event`: a `timeval` of two longs, then the

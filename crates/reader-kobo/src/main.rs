@@ -1,7 +1,7 @@
 //! The simple-books reader on the Kobo Clara BW.
 //!
 //! ```sh
-//! reader-kobo [--dir /mnt/onboard/.adds/simple-books]
+//! reader-kobo [--boot] [--dir /mnt/onboard/.adds/simple-books]
 //! reader-kobo --restore-screen
 //! ```
 //!
@@ -11,7 +11,12 @@
 //! it every time.
 //!
 //! Started by `kobo/reader.sh` once Nickel is stopped, which restarts Nickel
-//! when this exits, however it exits. It starts on the home screen, with the
+//! when this exits, however it exits. Or, with `--boot`, by `kobo/boot.sh`
+//! from `/etc/rc.local` before Nickel has started, which starts it when this
+//! exits. Then it leaves for Nickel straight away if a finger is on the
+//! screen, and once home is up it does what Nickel would: resets the boot
+//! counter (see `docs/clara-bw-hardware.md`), and removes `boot-started`, so
+//! the next boot starts it again. It starts on the home screen, with the
 //! `.book` files in the app folder's `books/`. The app folder also holds the
 //! library index, covers, saved places, preferences and page maps, and
 //! `reader.log`.
@@ -43,6 +48,7 @@ use std::{
     io::{self, Read, Write},
     os::{fd::AsFd, unix::fs::OpenOptionsExt},
     path::{Path, PathBuf},
+    process::Command,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime},
 };
@@ -51,7 +57,7 @@ use reader_app::{Event, Flow, Folder, Session, SyncSetup};
 
 use crate::{
     device::Kobo,
-    input::{EV_KEY, KEY_POWER, RawEvent, Touch},
+    input::{BTN_TOUCH, EV_KEY, KEY_POWER, RawEvent, Touch},
     sys::Framebuffer,
 };
 
@@ -67,6 +73,10 @@ const HOLD_TO_EXIT: Duration = Duration::from_secs(3);
 const SLOW: Duration = Duration::from_millis(300);
 /// The log is cut back to its end when it grows past this.
 const LOG_LIMIT: u64 = 1 << 20;
+/// Made by `boot.sh` as it starts the reader at boot, and removed once home
+/// is up. Still there at the next boot, it means this one never got that
+/// far, so that boot is Nickel's.
+const BOOT_STARTED: &str = "boot-started";
 
 static LOG: Mutex<Option<File>> = Mutex::new(None);
 
@@ -104,8 +114,9 @@ fn main() {
         .map_or_else(|| PathBuf::from(APP_DIR), PathBuf::from);
     open_log(&dir);
     std::panic::set_hook(Box::new(|info| log!("panic: {info}")));
-    log!("starting");
-    match run(&dir) {
+    let boot = args.iter().any(|a| a == "--boot");
+    log!("starting{}", if boot { " at boot" } else { "" });
+    match run(&dir, boot) {
         Ok(()) => log!("back to Nickel"),
         Err(error) => {
             log!("stopping: {error}");
@@ -130,7 +141,11 @@ fn open_log(dir: &Path) {
     }
 }
 
-fn run(dir: &Path) -> io::Result<()> {
+fn run(dir: &Path, boot: bool) -> io::Result<()> {
+    if boot && finger_on_screen() {
+        log!("a finger on the screen at boot: Nickel instead");
+        return Ok(());
+    }
     let framebuffer = Framebuffer::open()?;
     log!("{framebuffer:?}");
     let width = framebuffer.width;
@@ -157,6 +172,9 @@ fn run(dir: &Path) -> io::Result<()> {
         ssh: Some(Arc::new(online::KoboSsh::new(dir))),
     };
     session.enable_sync(setup, &mut kobo, Instant::now());
+    if boot {
+        booted(dir);
+    }
 
     let mut taps = Touch::default();
     // When the power button went down, if it's down. A release with no
@@ -231,6 +249,29 @@ fn run(dir: &Path) -> io::Result<()> {
         log_sync(&session, &mut job_started, &mut last_logged);
         tick_at = session.deadline(Instant::now());
     }
+}
+
+/// Whether a finger is on the touch panel. If it can't tell, no.
+fn finger_on_screen() -> bool {
+    File::open(TOUCH)
+        .and_then(|touch| sys::key_down(&touch, BTN_TOUCH))
+        .unwrap_or(false)
+}
+
+/// Home is up after starting at boot: what Nickel does once it's up, and
+/// the sign that this boot got this far.
+fn booted(dir: &Path) {
+    match Command::new("bootcount-ctl").arg("reset").status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => log!("bootcount-ctl reset: {status}"),
+        Err(error) => log!("bootcount-ctl reset: {error}"),
+    }
+    if let Err(error) = fs::remove_file(dir.join(BOOT_STARTED))
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        log!("removing {BOOT_STARTED}: {error}");
+    }
+    sys::sync();
 }
 
 /// Logs how a sync or pairing went, once it ends. Never the pairing code.
