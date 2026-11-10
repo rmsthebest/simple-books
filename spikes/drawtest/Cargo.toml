@@ -1,0 +1,18 @@
+# Phase 0 spike: draws through hwtcon on a Kobo Clara BW, times each refresh mode
+# and maps touches to screen coordinates. Not part of the workspace; build it from
+# this directory with `cargo build --release` (needs the armv7-unknown-linux-musleabihf
+# target). Findings are in docs/clara-bw-hardware.md.
+[package]
+name = "drawtest"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = "s"
+strip = true
