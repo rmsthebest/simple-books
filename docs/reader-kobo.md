@@ -14,7 +14,8 @@ KOReader in [`koreader-clara-bw.md`](koreader-clara-bw.md).
 |---|---|---|
 | `.adds/simple-books/reader-kobo` | `crates/reader-kobo`, built for `armv7-unknown-linux-musleabihf` | The reader, one static binary |
 | `.adds/simple-books/reader.sh` | `kobo/reader.sh` | Stops Nickel, runs the reader, starts Nickel again |
-| `.adds/nm/simple-books` | `kobo/nickelite-menu` | The **Simple Books** entry in the Nickelite tab |
+| `.adds/simple-books/ssh.sh` | `kobo/ssh.sh` | Starts and stops an SSH server from Nickel |
+| `.adds/nm/simple-books` | `kobo/nickelite-menu` | The **Simple Books**, **SSH on** and **SSH off** entries in the Nickelite tab |
 | `.adds/simple-books/books/*.book` | made by the server, or by hand (below) | Books. The newest one opens |
 
 The reader also writes, in `.adds/simple-books/`:
@@ -61,6 +62,18 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   once the screen has finished with the panel. Press the power button again to wake. It doesn't sleep while plugged in, since
   that can hang the Clara BW's kernel; it stays on the sleep screen and sleeps once
   unplugged.
+
+## SSH from Nickel
+
+**SSH on** in the Nickelite tab starts an SSH server on port 2222 while Nickel runs, so
+there's no need to open KOReader to reach the Kobo. Wi-Fi has to be on in Nickel.
+
+- It's KOReader's own server, started the way KOReader's SSH plugin starts it, so it has
+  the same host key, and KOReader's SSH menu shows it running.
+- It lets anyone on the network log in as root without a password, like KOReader's
+  **Login without password** option. Leave it off when you're not using it.
+- **SSH off** stops it. Starting the reader stops it too, since the reader turns Wi-Fi
+  off, and so does restarting the Kobo.
 
 ## If something goes wrong
 

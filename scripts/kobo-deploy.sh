@@ -26,8 +26,10 @@ else
     cp "target/${target}/release/reader-kobo" "${staging}/simple-books/reader-kobo"
 fi
 cp kobo/reader.sh "${staging}/simple-books/reader.sh"
+cp kobo/ssh.sh "${staging}/simple-books/ssh.sh"
 cp kobo/nickelite-menu "${staging}/nm/simple-books"
-chmod 755 "${staging}/simple-books/reader-kobo" "${staging}/simple-books/reader.sh"
+chmod 755 "${staging}/simple-books/reader-kobo" "${staging}/simple-books/reader.sh" \
+    "${staging}/simple-books/ssh.sh"
 
 tar -C "${staging}" -cf - simple-books nm |
     ${ssh_command} "root@${host}" 'tar -C /mnt/onboard/.adds -xf - && mkdir -p /mnt/onboard/.adds/simple-books/books'

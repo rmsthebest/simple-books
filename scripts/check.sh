@@ -25,6 +25,7 @@ cargo clippy -p reader-kobo --target armv7-unknown-linux-musleabihf -- -D warnin
 
 step "launch scripts parse"
 sh -n kobo/reader.sh
+sh -n kobo/ssh.sh
 sh -n scripts/kobo-deploy.sh
 
 step "sqlx cache is current"

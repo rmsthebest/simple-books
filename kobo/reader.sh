@@ -101,6 +101,9 @@ if pkill -0 nickel; then
         QtWebEngineProcess
     wait_for_exit nickel
     rm -f /tmp/nickel-hardware-status /run/kobo/udev/fifo
+    # Wi-Fi is going off, so an SSH server started from Nickelite has no
+    # more use.
+    "${APP_DIR}/ssh.sh" stop
     wifi_off
 fi
 
