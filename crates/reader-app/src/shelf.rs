@@ -319,6 +319,9 @@ mod tests {
             cover: false,
             opened: None,
             progress: None,
+            id: None,
+            revision: None,
+            added: None,
         }
     }
 

@@ -14,6 +14,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use sync_proto::Spot;
@@ -64,7 +65,8 @@ pub enum Progress {
 
 /// Syncs once. `local` is where the reader is in each synced book it has
 /// opened, by book id. Saves `state` to `paths.state` as it goes, so
-/// stopping at any point loses nothing.
+/// stopping at any point loses nothing. Setting `stop` ends it at the next
+/// chance with [`Error::Stopped`].
 pub fn sync(
     client: &Client,
     secret: &str,
@@ -72,7 +74,15 @@ pub fn sync(
     state: &mut State,
     local: &BTreeMap<String, Spot>,
     progress: &mut dyn FnMut(Progress),
+    stop: &AtomicBool,
 ) -> Result<Report, Error> {
+    let stopped = || {
+        if stop.load(Ordering::Relaxed) {
+            Err(Error::Stopped)
+        } else {
+            Ok(())
+        }
+    };
     let mut report = Report::default();
     fs::create_dir_all(&paths.books)?;
 
@@ -82,6 +92,7 @@ pub fn sync(
 
     progress(Progress::Checking);
     loop {
+        stopped()?;
         let page = client.changes(secret, state.since)?;
         if page.full && state.full_run.is_none() {
             state.full_run = Some(BTreeSet::new());
@@ -144,7 +155,7 @@ pub fn sync(
         }
     }
 
-    download_all(client, secret, paths, state, &mut report, progress)?;
+    download_all(client, secret, paths, state, &mut report, progress, stop)?;
     Ok(report)
 }
 
@@ -197,6 +208,7 @@ fn download_all(
     state: &mut State,
     report: &mut Report,
     progress: &mut dyn FnMut(Progress),
+    stop: &AtomicBool,
 ) -> Result<(), Error> {
     // A file deleted by hand is fetched again.
     for (id, synced) in &mut state.books {
@@ -232,7 +244,7 @@ fn download_all(
             title: synced.book.title.clone(),
         });
         let partial = paths.partial(&id);
-        match client.download(secret, &id, &file, &partial) {
+        match client.download(secret, &id, &file, &partial, stop) {
             Ok(()) => {
                 fs::rename(&partial, paths.book(&id))?;
                 if let Some(synced) = state.books.get_mut(&id) {

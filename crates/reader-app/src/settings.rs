@@ -174,6 +174,8 @@ impl Toggle {
 pub(crate) enum Action {
     Step(Setting, Step),
     Toggle(Toggle),
+    /// The sync screen.
+    Sync,
     Done,
 }
 
@@ -209,13 +211,15 @@ impl Layout {
         let toggles = ui::row(MARGIN, toggles_top, content, TOGGLE_HEIGHT, &[1.0, 1.0]);
         buttons.push((toggles[0], Action::Toggle(Toggle::Justify), "Justified"));
         buttons.push((toggles[1], Action::Toggle(Toggle::Hyphenate), "Hyphenated"));
-        let done = Rect {
-            left: MARGIN,
-            top: height - BUTTON_HEIGHT - 24.0,
-            width: content,
-            height: BUTTON_HEIGHT,
-        };
-        buttons.push((done, Action::Done, "Done"));
+        let bottom = ui::row(
+            MARGIN,
+            height - BUTTON_HEIGHT - 24.0,
+            content,
+            BUTTON_HEIGHT,
+            &[1.0, 1.0],
+        );
+        buttons.push((bottom[0], Action::Sync, "Sync"));
+        buttons.push((bottom[1], Action::Done, "Done"));
         Self { buttons }
     }
 
@@ -418,7 +422,8 @@ mod tests {
     #[test]
     fn nothing_overlaps_and_each_button_is_what_it_shows() {
         let layout = Layout::new(1072, 1448);
-        assert_eq!(layout.buttons.len(), 2 * ROWS.len() + 3);
+        // Two toggles, Sync and Done.
+        assert_eq!(layout.buttons.len(), 2 * ROWS.len() + 4);
         for (i, (rect, action, _)) in layout.buttons.iter().enumerate() {
             assert!(rect.top > PREVIEW_TOP + PREVIEW_HEIGHT, "{action:?}");
             assert!(

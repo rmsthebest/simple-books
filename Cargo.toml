@@ -93,6 +93,8 @@ landlock = { version = "0.4.7", optional = true }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"], optional = true }
 
 [dev-dependencies]
+reader-app = { path = "crates/reader-app" }
+reader-core = { path = "crates/reader-core" }
 reader-sync = { path = "crates/reader-sync" }
 futures-util = { version = "0.3.34", default-features = false }
 proptest = "1"
@@ -123,6 +125,10 @@ required-features = ["ssr"]
 
 [[test]]
 name = "reader_client"
+required-features = ["ssr"]
+
+[[test]]
+name = "reader_app"
 required-features = ["ssr"]
 
 [features]

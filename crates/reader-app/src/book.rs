@@ -13,19 +13,18 @@ use std::{
 use book_format::{BookReader, FormatError, Position};
 use reader_core::{PageMap, Reader, Settings, paginate_book};
 
-use crate::{AppError, Books, Device, load_json, save_json};
+use crate::{
+    AppError, Books, Device, Entry, load_json,
+    place::{START, SavedPlace},
+    save_json,
+};
 
 /// Opens the book afresh, for the reader and for background pagination.
 type Opener<R> = Arc<dyn Fn() -> Result<BookReader<R>, FormatError> + Send + Sync>;
 
-const START: Position = Position {
-    chapter: 0,
-    block: 0,
-    offset: 0,
-};
-
-pub(crate) fn position_file(book: u64) -> String {
-    format!("position-{book:016x}.json")
+/// The file a book's place is saved in, by [`Entry::place_key`].
+pub(crate) fn position_file(place_key: u64) -> String {
+    format!("position-{place_key:016x}.json")
 }
 
 pub(crate) fn pages_file(key: u64) -> String {
@@ -47,6 +46,10 @@ impl Drop for Background {
 pub(crate) struct OpenBook<R> {
     pub file: String,
     pub key: u64,
+    /// Where its place is saved: the same across files for a synced book.
+    place_key: u64,
+    /// The server's revision of the file, for a synced book.
+    revision: Option<i64>,
     open: Opener<R>,
     pub reader: Reader<R>,
     background: Option<Background>,
@@ -67,22 +70,27 @@ impl<R> std::fmt::Debug for OpenBook<R> {
 }
 
 impl<R: Read + Seek + Send + 'static> OpenBook<R> {
-    /// Opens the book in `file` where it was left.
+    /// Opens the book in `entry` where it was left.
     pub(crate) fn open(
         books: &Arc<dyn Books<R>>,
-        file: &str,
-        key: u64,
+        entry: &Entry,
         settings: &Settings,
         device: &mut dyn Device,
     ) -> Result<Self, AppError> {
         let books = Arc::clone(books);
-        let name = file.to_owned();
+        let name = entry.file.clone();
         let open: Opener<R> = Arc::new(move || books.open(&name));
-        let at = load_json(device, &position_file(key)).unwrap_or(START);
+        let key = entry.key;
+        let at = match load_json::<SavedPlace>(device, &position_file(entry.place_key())) {
+            Some(saved) => saved.resolve(&mut open()?, key, entry.revision),
+            None => START,
+        };
         let reader = open_reader(&open, key, settings, at, false, device)?;
         Ok(Self {
-            file: file.to_owned(),
+            file: entry.file.clone(),
             key,
+            place_key: entry.place_key(),
+            revision: entry.revision,
             open,
             reader,
             background: None,
@@ -113,10 +121,28 @@ impl<R: Read + Seek + Send + 'static> OpenBook<R> {
         self.anchor = None;
     }
 
+    /// Saves the place, with the time it was reached, unless it's where
+    /// it was: a book opened and left alone mustn't look freshly read, or
+    /// its old place would win over a newer one from another reader.
     pub(crate) fn save(&self, device: &mut dyn Device) {
-        if let Some(position) = self.reader.position() {
-            save_json(device, &position_file(self.key), &position);
+        let Some(position) = self.reader.position() else {
+            return;
+        };
+        let name = position_file(self.place_key);
+        let saved: Option<SavedPlace> = load_json(device, &name);
+        if saved
+            .is_some_and(|saved| saved.position == position && saved.fits(self.key, self.revision))
+        {
+            return;
         }
+        let place = SavedPlace {
+            position,
+            file: self.key,
+            revision: self.revision,
+            progress: self.progress().unwrap_or(0.0),
+            at: device.clock(),
+        };
+        save_json(device, &name, &place);
     }
 
     /// How far through the book the current page ends, from 0 to 1: the

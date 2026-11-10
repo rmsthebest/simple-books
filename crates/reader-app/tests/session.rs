@@ -579,7 +579,7 @@ const LINE_SPACING: u8 = 1;
 const LIGHT: u8 = 5;
 const TURN_GUARD: u8 = 7;
 const JUSTIFIED: (f32, f32) = (296.0, 1253.0);
-const SETTINGS_DONE: (f32, f32) = (536.0, 1376.0);
+const SETTINGS_DONE: (f32, f32) = (776.0, 1376.0);
 /// On the library screen: the first two books, sorting by author, and Home.
 const LIBRARY_FIRST: (f32, f32) = (536.0, 306.0);
 const LIBRARY_SECOND: (f32, f32) = (536.0, 438.0);

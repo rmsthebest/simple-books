@@ -2889,8 +2889,10 @@ dependencies = [
  "book-format",
  "image",
  "reader-core",
+ "reader-sync",
  "serde",
  "serde_json",
+ "sync-proto",
  "thiserror 2.0.21",
 ]
 
@@ -3511,6 +3513,8 @@ dependencies = [
  "leptos_router",
  "proptest",
  "rand 0.9.5",
+ "reader-app",
+ "reader-core",
  "reader-sync",
  "reqwest",
  "rustix",

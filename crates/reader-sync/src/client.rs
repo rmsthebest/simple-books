@@ -2,8 +2,9 @@
 
 use std::{
     fs::{self, File, OpenOptions},
-    io,
+    io::{self, Read, Write},
     path::Path,
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
@@ -35,6 +36,9 @@ pub enum Error {
     /// A download wasn't the file it should have been.
     #[error("the download was damaged: {0}")]
     Damaged(String),
+    /// Asked to stop, such as before the reader sleeps.
+    #[error("stopped")]
+    Stopped,
     #[error(transparent)]
     Io(#[from] io::Error),
 }
@@ -143,18 +147,20 @@ impl Client {
     /// Downloads a book's file to `partial`, carrying on from whatever is
     /// already there, and checks it against `file`. Returns once `partial`
     /// holds the whole, checked file; the caller moves it into place. A
-    /// damaged download is deleted, so the next try starts afresh.
+    /// damaged download is deleted, so the next try starts afresh. Setting
+    /// `stop` ends it soon after, keeping what's come so far.
     pub fn download(
         &self,
         secret: &str,
         book: &str,
         file: &BookFile,
         partial: &Path,
+        stop: &AtomicBool,
     ) -> Result<(), Error> {
         let have = fs::metadata(partial).map_or(0, |m| m.len());
         if have > file.size {
             fs::remove_file(partial)?;
-            return self.download(secret, book, file, partial);
+            return self.download(secret, book, file, partial, stop);
         }
         if have < file.size {
             let mut request = self
@@ -180,7 +186,20 @@ impl Client {
                 .with_config()
                 .limit(file.size - start + 1)
                 .reader();
-            io::copy(&mut body, &mut out).map_err(|error| Error::Network(error.to_string()))?;
+            let mut buffer = vec![0u8; 64 * 1024];
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    out.sync_all()?;
+                    return Err(Error::Stopped);
+                }
+                let n = body
+                    .read(&mut buffer)
+                    .map_err(|error| Error::Network(error.to_string()))?;
+                if n == 0 {
+                    break;
+                }
+                out.write_all(&buffer[..n])?;
+            }
             out.sync_all()?;
         }
         let sha256 = sha256_of(partial)?;

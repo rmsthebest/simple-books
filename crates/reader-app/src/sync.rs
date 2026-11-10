@@ -1,0 +1,456 @@
+//! Syncing with the server on another thread, so reading carries on.
+//!
+//! The session asks for a job ([`Syncer::pair`], [`Syncer::sync`]); the
+//! thread brings the network up through the platform's [`Network`], does
+//! the job with `reader-sync`, takes the network down, and reports through
+//! a channel the session reads on each tick ([`Syncer::updates`]). One job
+//! runs at a time.
+
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    time::{Duration, Instant},
+};
+
+use reader_sync::{Client, Error, PairStatus, Paths, Progress, Report, Spot, State};
+use serde::{Deserialize, Serialize};
+
+/// What the platform does to be online: on the Kobo, Wi-Fi is off unless a
+/// sync needs it.
+pub trait Network: Send + Sync {
+    /// Brings the network up, waiting until it's usable. The message says
+    /// why not, for the screen.
+    fn up(&self) -> Result<(), String>;
+    /// Takes it down again once the job's done.
+    fn down(&self);
+}
+
+/// A network that's always there, as on a desktop.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AlwaysOnline;
+
+impl Network for AlwaysOnline {
+    fn up(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn down(&self) {}
+}
+
+/// How the platform syncs.
+#[derive(Clone)]
+pub struct SyncSetup {
+    /// The app folder: `sync.json`, the secret, and `books/`.
+    pub dir: PathBuf,
+    /// The website's address, if one is known.
+    pub server: Option<String>,
+    /// What the website calls this reader.
+    pub name: String,
+    pub network: Arc<dyn Network>,
+}
+
+impl std::fmt::Debug for SyncSetup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncSetup")
+            .field("dir", &self.dir)
+            .field("server", &self.server)
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What the thread says as it goes. [`Update::Done`] is always last.
+#[derive(Debug)]
+pub(crate) enum Update {
+    Connecting,
+    Progress(Progress),
+    /// A code to show while pairing.
+    Code {
+        code: String,
+        url: String,
+    },
+    Paired {
+        user: String,
+    },
+    Synced(Report),
+    /// It didn't work; this says why, for the screen.
+    Failed(String),
+    /// The server no longer knows this reader: it was removed on the
+    /// website. Its secret is forgotten.
+    Unpaired,
+    Done,
+}
+
+/// What the sync screen shows while a job runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Activity {
+    Connecting,
+    Pairing { code: Option<(String, String)> },
+    Syncing(String),
+}
+
+/// How the last job ended, kept across restarts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Status {
+    /// Whose library it's paired with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<Last>,
+}
+
+/// How a job ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Last {
+    /// In seconds since 1970.
+    pub at: u64,
+    pub worked: bool,
+    /// What came of it, such as "2 new books".
+    pub text: String,
+}
+
+impl Last {
+    /// As the sync screen puts it, `now` being the time in seconds since
+    /// 1970.
+    pub(crate) fn shown(&self, now: u64) -> String {
+        let when = crate::sync_page::ago(now.saturating_sub(self.at));
+        if self.worked {
+            format!("Last synced {when}: {}", self.text)
+        } else {
+            format!("Last tried {when}: {}", self.text)
+        }
+    }
+}
+
+/// What a sync did, in a few words.
+pub(crate) fn summary(report: &Report) -> String {
+    let mut parts = Vec::new();
+    let count = |n: usize, one: &str, many: &str| {
+        if n == 1 {
+            format!("1 {one}")
+        } else {
+            format!("{n} {many}")
+        }
+    };
+    if !report.downloaded.is_empty() {
+        parts.push(count(
+            report.downloaded.len(),
+            "book downloaded",
+            "books downloaded",
+        ));
+    }
+    if !report.removed.is_empty() {
+        parts.push(count(report.removed.len(), "book removed", "books removed"));
+    }
+    if !report.changed.is_empty() {
+        parts.push(count(report.changed.len(), "book updated", "books updated"));
+    }
+    if !report.places.is_empty() {
+        parts.push(count(
+            report.places.len(),
+            "place from elsewhere",
+            "places from elsewhere",
+        ));
+    }
+    if !report.failed.is_empty() {
+        parts.push(count(
+            report.failed.len(),
+            "download to try again",
+            "downloads to try again",
+        ));
+    }
+    if parts.is_empty() {
+        "everything was up to date.".to_owned()
+    } else {
+        parts.join(", ") + "."
+    }
+}
+
+pub(crate) const STATUS: &str = "sync-status.json";
+
+struct Running {
+    updates: mpsc::Receiver<Update>,
+    stop: Arc<AtomicBool>,
+}
+
+pub(crate) struct Syncer {
+    pub setup: SyncSetup,
+    paths: Paths,
+    running: Option<Running>,
+    pub activity: Option<Activity>,
+    pub status: Status,
+    /// When the last job started, to sync again only now and then.
+    pub started: Option<Instant>,
+}
+
+impl std::fmt::Debug for Syncer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Syncer")
+            .field("setup", &self.setup)
+            .field("activity", &self.activity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Syncer {
+    pub(crate) fn new(setup: SyncSetup, status: Status) -> Self {
+        let paths = Paths::in_dir(&setup.dir);
+        Self {
+            setup,
+            paths,
+            running: None,
+            activity: None,
+            status,
+            started: None,
+        }
+    }
+
+    pub(crate) fn paired(&self) -> bool {
+        self.paths.secret().is_some()
+    }
+
+    pub(crate) fn busy(&self) -> bool {
+        self.running.is_some()
+    }
+
+    /// What's been synced, as the thread last saved it.
+    pub(crate) fn state(&self) -> State {
+        State::load(&self.paths.state)
+    }
+
+    /// Asks a running job to stop soon.
+    pub(crate) fn stop(&self) {
+        if let Some(running) = &self.running {
+            running.stop.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Forgets the pairing and what was synced. The books stay, as books
+    /// on the reader.
+    pub(crate) fn unpair(&mut self) {
+        self.stop();
+        let _ = self.paths.forget();
+        self.status.user = None;
+    }
+
+    /// Starts pairing, then a first sync once the code's been entered.
+    pub(crate) fn pair(&mut self, now: Instant) {
+        let Some(server) = self.setup.server.clone() else {
+            return;
+        };
+        if self.busy() {
+            return;
+        }
+        let name = self.setup.name.clone();
+        let paths = self.paths.clone();
+        self.activity = Some(Activity::Connecting);
+        self.spawn(now, move |send, stop| {
+            let client = Client::new(&server);
+            pair(&client, &name, &paths, send, stop);
+        });
+    }
+
+    /// Starts a sync, sending `local`: where the reader is in each synced
+    /// book.
+    pub(crate) fn sync(&mut self, local: BTreeMap<String, Spot>, now: Instant) {
+        let Some(server) = self.setup.server.clone() else {
+            return;
+        };
+        if self.busy() || !self.paired() {
+            return;
+        }
+        let paths = self.paths.clone();
+        self.activity = Some(Activity::Connecting);
+        self.spawn(now, move |send, stop| {
+            let client = Client::new(&server);
+            sync_once(&client, &paths, &local, send, stop);
+        });
+    }
+
+    fn spawn(
+        &mut self,
+        now: Instant,
+        job: impl FnOnce(&dyn Fn(Update), &AtomicBool) + Send + 'static,
+    ) {
+        let (sender, updates) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let network = Arc::clone(&self.setup.network);
+        std::thread::spawn(move || {
+            let send = |update| {
+                let _ = sender.send(update);
+            };
+            send(Update::Connecting);
+            match network.up() {
+                Ok(()) => {
+                    job(&send, &thread_stop);
+                    network.down();
+                }
+                Err(why) => send(Update::Failed(why)),
+            }
+            send(Update::Done);
+        });
+        self.running = Some(Running { updates, stop });
+        self.started = Some(now);
+    }
+
+    /// The thread's news since last asked. Notes what the screen should
+    /// show as it goes.
+    pub(crate) fn updates(&mut self) -> Vec<Update> {
+        let Some(running) = &self.running else {
+            return Vec::new();
+        };
+        let mut updates = Vec::new();
+        loop {
+            match running.updates.try_recv() {
+                Ok(update) => updates.push(update),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    // Gone without saying it was done, if it panicked.
+                    if !updates.iter().any(|u| matches!(u, Update::Done)) {
+                        updates.push(Update::Done);
+                    }
+                    break;
+                }
+            }
+        }
+        for update in &updates {
+            match update {
+                Update::Connecting => {
+                    if self.activity.is_none() {
+                        self.activity = Some(Activity::Connecting);
+                    }
+                }
+                Update::Code { code, url } => {
+                    self.activity = Some(Activity::Pairing {
+                        code: Some((code.clone(), url.clone())),
+                    });
+                }
+                Update::Paired { user } => {
+                    self.status.user = Some(user.clone());
+                    self.activity = Some(Activity::Syncing("Getting your library…".into()));
+                }
+                Update::Progress(progress) => {
+                    self.activity = Some(Activity::Syncing(progress_text(progress)));
+                }
+                Update::Unpaired => self.status.user = None,
+                Update::Synced(_) | Update::Failed(_) => {}
+                Update::Done => {
+                    self.running = None;
+                    self.activity = None;
+                }
+            }
+        }
+        updates
+    }
+}
+
+fn progress_text(progress: &Progress) -> String {
+    match progress {
+        Progress::Sending => "Sending where you are in your books…".to_owned(),
+        Progress::Checking => "Checking for changes…".to_owned(),
+        Progress::Downloading { done, total, title } => {
+            format!("Downloading {} of {total}: {title}", done + 1)
+        }
+    }
+}
+
+/// What to say about a failure, for the screen.
+fn failure(error: &Error) -> String {
+    match error {
+        Error::Network(_) => "Couldn't reach the server.".to_owned(),
+        Error::NotPaired => "This reader was removed on the website. Pair it again.".to_owned(),
+        Error::Stopped => "Stopped.".to_owned(),
+        Error::Server { message, .. } => format!("The server said: {message}"),
+        Error::NotFound => "The server didn't have something it listed.".to_owned(),
+        Error::Damaged(_) => "A download was damaged. It'll be tried again.".to_owned(),
+        Error::Io(error) => format!("Couldn't save: {error}"),
+    }
+}
+
+/// The longest pairing waits, whatever the server says.
+const PAIRING_LONGEST: Duration = Duration::from_mins(30);
+
+fn pair(client: &Client, name: &str, paths: &Paths, send: &dyn Fn(Update), stop: &AtomicBool) {
+    let start = match client.pair_start(name) {
+        Ok(start) => start,
+        Err(error) => return send(Update::Failed(failure(&error))),
+    };
+    send(Update::Code {
+        code: start.code.clone(),
+        url: start.url.clone(),
+    });
+    let until =
+        Instant::now() + Duration::from_secs(u64::from(start.expires_in)).min(PAIRING_LONGEST);
+    let every = Duration::from_secs(u64::from(start.interval.clamp(1, 60)));
+    while Instant::now() < until {
+        if !wait(every, stop) {
+            return send(Update::Failed("Stopped.".into()));
+        }
+        match client.pair_status(&start.secret) {
+            // Still waiting. The network may come back before the code runs
+            // out.
+            Ok(PairStatus::Pending) | Err(_) => {}
+            Ok(PairStatus::Paired { user }) => {
+                if let Err(error) = paths.save_secret(&start.secret) {
+                    return send(Update::Failed(format!(
+                        "Couldn't save the pairing: {error}"
+                    )));
+                }
+                send(Update::Paired { user });
+                return sync_once(client, paths, &BTreeMap::new(), send, stop);
+            }
+            Ok(PairStatus::Expired) => break,
+        }
+    }
+    send(Update::Failed(
+        "The code ran out. Pair again for a new one.".into(),
+    ));
+}
+
+/// Sleeps for `time`, waking early to stop. False if it should stop.
+fn wait(time: Duration, stop: &AtomicBool) -> bool {
+    let until = Instant::now() + time;
+    while Instant::now() < until {
+        if stop.load(Ordering::Relaxed) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100).min(until - Instant::now()));
+    }
+    !stop.load(Ordering::Relaxed)
+}
+
+fn sync_once(
+    client: &Client,
+    paths: &Paths,
+    local: &BTreeMap<String, Spot>,
+    send: &dyn Fn(Update),
+    stop: &AtomicBool,
+) {
+    let Some(secret) = paths.secret() else {
+        return send(Update::Unpaired);
+    };
+    let mut state = State::load(&paths.state);
+    let mut progress = |progress| send(Update::Progress(progress));
+    match reader_sync::sync(
+        client,
+        &secret,
+        paths,
+        &mut state,
+        local,
+        &mut progress,
+        stop,
+    ) {
+        Ok(report) => send(Update::Synced(report)),
+        Err(Error::NotPaired) => {
+            let _ = paths.forget();
+            send(Update::Unpaired);
+        }
+        Err(error) => send(Update::Failed(failure(&error))),
+    }
+}

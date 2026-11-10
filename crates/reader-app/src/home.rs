@@ -331,6 +331,9 @@ mod tests {
                 cover: false,
                 opened: (i < opened).then(|| 1000 - i),
                 progress: None,
+                id: None,
+                revision: None,
+                added: None,
             })
             .collect();
         let json = serde_json::json!({ "books": books });

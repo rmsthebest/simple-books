@@ -24,6 +24,10 @@
 //!   Clara BW's kernel.
 //! - **Saved:** the place in each book, the preferences, and each book's
 //!   page map once it's complete, through [`Device::save`].
+//! - **Sync:** with [`Session::enable_sync`], books come from the server and
+//!   places go both ways, on another thread ([`sync`]). It syncs on
+//!   starting, on waking once [`SYNC_EVERY`] has passed, and when asked on
+//!   the sync screen ([`sync_page`]), from settings.
 #![forbid(unsafe_code)]
 #![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
@@ -32,26 +36,32 @@ mod folder;
 mod home;
 mod library;
 mod menu;
+mod place;
 mod search;
 mod settings;
 mod shelf;
+mod sync;
+mod sync_page;
 mod ui;
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     io::{self, Read, Seek},
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use book_format::{BookReader, FormatError};
+use book_format::{BookReader, FormatError, Position};
 pub use reader_core::Turn;
 use reader_core::{Canvas, Picture, Reader, ReaderError, Settings, TurnGuard, Typesetter};
 use serde::{Deserialize, Serialize};
 
 pub use folder::Folder;
 pub use library::{Entry, Library};
+use place::SavedPlace;
+use reader_sync::{Report, Spot, Status};
 pub use shelf::Sort;
+pub use sync::{AlwaysOnline, Network, SyncSetup};
 
 /// A full refresh every this many turns clears ghosting.
 pub const FULL_EVERY: u32 = 6;
@@ -74,6 +84,10 @@ const SAVE_EVERY: u32 = 10;
 /// A tap this far down the screen, as a fraction of its height, opens the
 /// menu.
 const MENU_BAND: f32 = 0.1;
+/// On waking, it syncs if it hasn't for this long.
+pub const SYNC_EVERY: Duration = Duration::from_mins(30);
+/// While a sync runs, the session looks for news this often.
+const SYNC_CHECK: Duration = Duration::from_millis(500);
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -258,6 +272,7 @@ enum Mode {
     Library(shelf::Layout),
     Search(search::Layout),
     Settings(settings::Layout),
+    Sync(sync_page::Layout),
     Reading,
     Menu(menu::Layout),
     /// On the sleep screen, waiting to suspend, or awake again after a
@@ -278,6 +293,7 @@ enum Back {
     /// Search, with this typed, going back to this library page.
     Search(String, usize),
     Settings,
+    Sync,
     /// The page of the open book, without the menu.
     Reading,
 }
@@ -303,6 +319,8 @@ pub struct Session<R> {
     ignored: u32,
     last_touch: Instant,
     woke: Option<Instant>,
+    /// Set by [`Session::enable_sync`].
+    syncer: Option<sync::Syncer>,
 }
 
 impl<R> std::fmt::Debug for Session<R> {
@@ -351,6 +369,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             ignored: 0,
             last_touch: now,
             woke: None,
+            syncer: None,
         };
         session.go_home(device, Refresh::Full, now);
         Ok(session)
@@ -373,6 +392,287 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     /// Whether the settings screen is up.
     pub fn in_settings(&self) -> bool {
         matches!(self.mode, Mode::Settings(_))
+    }
+
+    /// Whether the sync screen is up.
+    pub fn in_sync(&self) -> bool {
+        matches!(self.mode, Mode::Sync(_))
+    }
+
+    /// Whether a sync or a pairing is under way.
+    pub fn syncing(&self) -> bool {
+        self.syncer.as_ref().is_some_and(sync::Syncer::busy)
+    }
+
+    /// The code being shown to pair with, if there is one.
+    pub fn pairing_code(&self) -> Option<&str> {
+        match self.syncer.as_ref()?.activity.as_ref()? {
+            sync::Activity::Pairing {
+                code: Some((code, _)),
+            } => Some(code),
+            _ => None,
+        }
+    }
+
+    /// How the last sync went, as the sync screen says it.
+    pub fn last_sync(&self) -> Option<&str> {
+        let last = self.syncer.as_ref()?.status.last.as_ref()?;
+        Some(&last.text)
+    }
+
+    /// Turns on syncing with a server, and syncs if already paired.
+    pub fn enable_sync(&mut self, setup: SyncSetup, device: &mut dyn Device, now: Instant) {
+        let status = load_json(device, sync::STATUS).unwrap_or_default();
+        let syncer = sync::Syncer::new(setup, status);
+        if self.library.apply_sync(&syncer.state()) {
+            self.library.save(device);
+        }
+        self.syncer = Some(syncer);
+        self.start_sync(device, now);
+    }
+
+    /// Starts a sync, unless one's running or it isn't paired.
+    fn start_sync(&mut self, device: &mut dyn Device, now: Instant) {
+        let local = self.local_places(device);
+        if let Some(syncer) = self.syncer.as_mut()
+            && syncer.paired()
+        {
+            syncer.sync(local, now);
+        }
+    }
+
+    /// Where the reader is in each synced book it's opened, to send.
+    fn local_places(&mut self, device: &mut dyn Device) -> BTreeMap<String, Spot> {
+        self.save(device);
+        let mut places = BTreeMap::new();
+        for entry in self.library.books() {
+            let Some(id) = &entry.id else {
+                continue;
+            };
+            let Some(saved) =
+                load_json::<SavedPlace>(device, &book::position_file(entry.place_key()))
+            else {
+                continue;
+            };
+            let Some(revision) = saved.revision.or(entry.revision) else {
+                continue;
+            };
+            if saved.at == 0 {
+                continue;
+            }
+            let status = if saved.progress >= 0.999 {
+                Status::Finished
+            } else {
+                Status::Reading
+            };
+            places.insert(
+                id.clone(),
+                Spot {
+                    chapter: saved.position.chapter,
+                    block: saved.position.block,
+                    offset: saved.position.offset,
+                    revision,
+                    percent: saved.progress * 100.0,
+                    status,
+                    at: saved.at as i64,
+                },
+            );
+        }
+        places
+    }
+
+    /// Takes in what the sync thread has said, and shows it.
+    fn sync_news(&mut self, device: &mut dyn Device, now: Instant) {
+        let Some(syncer) = self.syncer.as_mut() else {
+            return;
+        };
+        let updates = syncer.updates();
+        if updates.is_empty() {
+            return;
+        }
+        let mut library_changed = false;
+        let mut ended = false;
+        for update in updates {
+            match update {
+                sync::Update::Synced(report) => {
+                    library_changed |= self.synced(&report, device);
+                    self.ended(true, sync::summary(&report), device);
+                }
+                sync::Update::Failed(why) => self.ended(false, why, device),
+                sync::Update::Unpaired => self.ended(
+                    false,
+                    "This reader was removed on the website. Pair it again.".to_owned(),
+                    device,
+                ),
+                sync::Update::Done => ended = true,
+                sync::Update::Connecting
+                | sync::Update::Progress(_)
+                | sync::Update::Code { .. }
+                | sync::Update::Paired { .. } => {}
+            }
+        }
+        if ended && let Some(syncer) = &self.syncer {
+            save_json(device, sync::STATUS, &syncer.status);
+        }
+        match &self.mode {
+            Mode::Sync(_) => self.show_sync(device, Refresh::Partial, now),
+            Mode::Home(_) if library_changed => self.go_home(device, Refresh::Partial, now),
+            Mode::Library(layout) if library_changed => {
+                let page = layout.page();
+                self.show_library(page, device, Refresh::Partial, now);
+            }
+            _ => {}
+        }
+    }
+
+    fn ended(&mut self, worked: bool, text: String, device: &mut dyn Device) {
+        let at = device.clock();
+        if let Some(syncer) = self.syncer.as_mut() {
+            syncer.status.last = Some(sync::Last { at, worked, text });
+        }
+    }
+
+    /// Brings the library up to date after a sync, and moves to places
+    /// read elsewhere. Returns whether the library changed.
+    fn synced(&mut self, report: &Report, device: &mut dyn Device) -> bool {
+        let Some(syncer) = &self.syncer else {
+            return false;
+        };
+        let state = syncer.state();
+        let mut changed = self.library.refresh(self.books.as_ref(), device);
+        changed |= self.library.apply_sync(&state);
+        let showing = matches!(
+            self.mode,
+            Mode::Reading
+                | Mode::Menu(_)
+                | Mode::Asleep {
+                    back: Back::Reading,
+                    ..
+                }
+        );
+        for (id, spot) in &report.places {
+            let Some(entry) = self.library.by_id(id).cloned() else {
+                continue;
+            };
+            let open = self
+                .book
+                .as_ref()
+                .is_some_and(|book| book.file == entry.file);
+            if open && showing {
+                // Being read here, so here wins; it's sent next time.
+                continue;
+            }
+            let place = SavedPlace {
+                position: Position {
+                    chapter: spot.chapter,
+                    block: spot.block,
+                    offset: spot.offset,
+                },
+                file: 0,
+                revision: Some(spot.revision),
+                progress: (spot.percent / 100.0).clamp(0.0, 1.0),
+                at: u64::try_from(spot.at).unwrap_or(0),
+            };
+            save_json(device, &book::position_file(entry.place_key()), &place);
+            self.library.set_progress(&entry.file, place.progress);
+            if open {
+                // Opened again from the new place. Not saved first, which
+                // would put the old place back.
+                self.book = None;
+            }
+            changed = true;
+        }
+        // A book that's gone, or whose file was replaced, is opened afresh.
+        if !showing
+            && let Some(book) = &self.book
+            && self
+                .library
+                .get(&book.file)
+                .is_none_or(|e| e.key != book.key)
+        {
+            self.book = None;
+        }
+        if changed {
+            self.library.save(device);
+        }
+        changed
+    }
+
+    /// What the sync screen is about now.
+    fn sync_view(&self) -> sync_page::View {
+        let Some(syncer) = &self.syncer else {
+            return sync_page::View::NoServer;
+        };
+        let Some(server) = syncer.setup.server.clone() else {
+            return sync_page::View::NoServer;
+        };
+        if let Some(activity) = &syncer.activity {
+            return sync_page::View::Busy(activity.clone());
+        }
+        if syncer.paired() {
+            sync_page::View::Paired {
+                server,
+                user: syncer.status.user.clone(),
+            }
+        } else {
+            sync_page::View::Unpaired { server }
+        }
+    }
+
+    fn show_sync(&mut self, device: &mut dyn Device, refresh: Refresh, now: Instant) {
+        let view = self.sync_view();
+        let confirming = match &self.mode {
+            Mode::Sync(layout) => layout.confirming && layout.view == view,
+            _ => false,
+        };
+        let settings = Settings::default();
+        let layout = sync_page::Layout::new(settings.width, settings.height, view, confirming);
+        let battery = battery_text(device);
+        let clock = device.clock();
+        let last = self
+            .syncer
+            .as_ref()
+            .and_then(|syncer| syncer.status.last.as_ref())
+            .map(|last| last.shown(clock));
+        layout.draw(&mut self.screen, &mut self.ui, last.as_deref(), &battery);
+        device.show(&self.screen, refresh);
+        self.guard.refreshing(now + refresh.duration());
+        self.mode = Mode::Sync(layout);
+    }
+
+    fn sync_tap(&mut self, x: f32, y: f32, now: Instant, device: &mut dyn Device) {
+        let Mode::Sync(layout) = &mut self.mode else {
+            return;
+        };
+        let action = layout.hit(x, y);
+        let confirming = layout.confirming;
+        layout.confirming = false;
+        match action {
+            Some(sync_page::Action::Back) => {
+                self.show_settings(device, Refresh::Full, now);
+                return;
+            }
+            Some(sync_page::Action::Pair) => {
+                if let Some(syncer) = self.syncer.as_mut() {
+                    syncer.pair(now);
+                }
+            }
+            Some(sync_page::Action::SyncNow) => self.start_sync(device, now),
+            Some(sync_page::Action::Stop) => {
+                if let Some(syncer) = &self.syncer {
+                    syncer.stop();
+                }
+            }
+            Some(sync_page::Action::Unpair) if confirming => {
+                if let Some(syncer) = self.syncer.as_mut() {
+                    syncer.unpair();
+                    save_json(device, sync::STATUS, &syncer.status);
+                }
+            }
+            Some(sync_page::Action::Unpair) => layout.confirming = true,
+            None => return,
+        }
+        self.show_sync(device, Refresh::Partial, now);
     }
 
     /// Whether the library screen is up.
@@ -401,11 +701,15 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             | Mode::Library(_)
             | Mode::Search(_)
             | Mode::Settings(_)
+            | Mode::Sync(_)
             | Mode::Reading
             | Mode::Menu(_) => self.last_touch + AUTO_SLEEP,
         };
         if self.book.as_ref().is_some_and(book::OpenBook::paginating) {
             deadline = deadline.min(now + BACKGROUND_CHECK);
+        }
+        if self.syncing() {
+            deadline = deadline.min(now + SYNC_CHECK);
         }
         deadline
     }
@@ -423,6 +727,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let in_library = matches!(self.mode, Mode::Library(_));
         let in_search = matches!(self.mode, Mode::Search(_));
         let in_settings = matches!(self.mode, Mode::Settings(_));
+        let in_sync = matches!(self.mode, Mode::Sync(_));
         let in_menu = matches!(self.mode, Mode::Menu(_));
         let asleep = matches!(self.mode, Mode::Asleep { .. });
         match event {
@@ -447,7 +752,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Event::Turn(turn) if in_library => self.library_page(turn, now, device),
             Event::Tap { x, y } if in_search => self.search_tap(x, y, now, device)?,
             Event::Tap { x, y } if in_settings => self.settings_tap(x, y, now, device),
-            _ if at_home || in_library || in_search || in_settings || in_menu => {}
+            Event::Tap { x, y } if in_sync => self.sync_tap(x, y, now, device),
+            _ if at_home || in_library || in_search || in_settings || in_sync || in_menu => {}
             Event::Tap { x, y } => self.reading_tap(x, y, now, device)?,
             Event::Turn(turn) => self.turn(turn, now, device)?,
             Event::Back => {
@@ -474,7 +780,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         device: &mut dyn Device,
         now: Instant,
     ) -> Result<(), AppError> {
-        let Some(key) = self.library.get(file).map(|entry| entry.key) else {
+        let Some(entry) = self.library.get(file).cloned() else {
             return Ok(());
         };
         let settings = self.preferences.settings();
@@ -489,8 +795,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 self.leave_book(device);
                 self.book = Some(book::OpenBook::open(
                     &self.books,
-                    file,
-                    key,
+                    &entry,
                     &settings,
                     device,
                 )?);
@@ -733,6 +1038,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 save_json(device, PREFERENCES, &self.preferences);
                 self.show_settings(device, Refresh::Partial, now);
             }
+            Some(settings::Action::Sync) => self.show_sync(device, Refresh::Full, now),
             Some(settings::Action::Done) => self.go_home(device, Refresh::Full, now),
             None => {}
         }
@@ -872,10 +1178,18 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         if let Some(book) = self.book.as_mut() {
             book.collect(device);
         }
+        self.sync_news(device, now);
+        let syncing = self.syncing();
         match &mut self.mode {
             Mode::Asleep { suspend_at, .. } => {
                 if now >= *suspend_at {
-                    if !device.battery().is_some_and(|b| b.charging) && device.suspend() {
+                    if syncing {
+                        // Not with the network up: it finishes first.
+                        if let Some(syncer) = &self.syncer {
+                            syncer.stop();
+                        }
+                        *suspend_at = now + SLEEP_RETRY;
+                    } else if !device.battery().is_some_and(|b| b.charging) && device.suspend() {
                         self.wake(device, Instant::now().max(now))?;
                     } else {
                         *suspend_at = now + SLEEP_RETRY;
@@ -886,6 +1200,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             | Mode::Library(_)
             | Mode::Search(_)
             | Mode::Settings(_)
+            | Mode::Sync(_)
             | Mode::Reading
             | Mode::Menu(_) => {
                 let idle = now.duration_since(self.last_touch) >= AUTO_SLEEP;
@@ -904,6 +1219,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Mode::Library(layout) => Back::Library(layout.page()),
             Mode::Search(layout) => Back::Search(layout.query().to_owned(), layout.library_page()),
             Mode::Settings(_) => Back::Settings,
+            Mode::Sync(_) => Back::Sync,
             Mode::Reading | Mode::Menu(_) | Mode::Asleep { .. } => Back::Reading,
         };
         if back == Back::Reading {
@@ -943,6 +1259,13 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         };
         self.woke = Some(now);
         self.last_touch = now;
+        let due = self.syncer.as_ref().is_some_and(|s| {
+            s.started
+                .is_none_or(|at| now.duration_since(at) >= SYNC_EVERY)
+        });
+        if due {
+            self.start_sync(device, now);
+        }
         match back {
             Back::Reading if self.book.is_some() => {
                 self.mode = Mode::Reading;
@@ -953,6 +1276,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 self.show_search(query, page, device, Refresh::Full, now);
             }
             Back::Settings => self.show_settings(device, Refresh::Full, now),
+            Back::Sync => self.show_sync(device, Refresh::Full, now),
             Back::Home | Back::Reading => self.go_home(device, Refresh::Full, now),
         }
         Ok(())

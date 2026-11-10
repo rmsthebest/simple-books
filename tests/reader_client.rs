@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::{collections::BTreeMap, fs, net::SocketAddr};
+use std::{collections::BTreeMap, fs, net::SocketAddr, sync::atomic::AtomicBool};
 
 use common::TestServer;
 use reader_sync::{Client, Error, PairStatus, Paths, Report, Spot, State, Status, sync};
@@ -98,7 +98,15 @@ impl Reader {
             .collect();
         blocking(move || {
             let mut state = State::load(&paths.state);
-            sync(&client, &secret, &paths, &mut state, &local, &mut |_| {})
+            sync(
+                &client,
+                &secret,
+                &paths,
+                &mut state,
+                &local,
+                &mut |_| {},
+                &AtomicBool::new(false),
+            )
         })
         .await
     }

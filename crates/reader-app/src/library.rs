@@ -45,9 +45,32 @@ pub struct Entry {
     /// last left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<f32>,
+    /// The server's id, for a synced book.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The server's revision of this file, for a synced book.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+    /// When the server's library got it, for a synced book, in seconds
+    /// since 1970. A file downloaded again doesn't count as newly added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added: Option<u64>,
 }
 
 impl Entry {
+    /// Where its place is saved. A synced book's stays the same when its
+    /// file is made again; any other book's goes with its file.
+    pub fn place_key(&self) -> u64 {
+        self.id
+            .as_ref()
+            .map_or(self.key, |id| book_key(format!("server:{id}").as_bytes()))
+    }
+
+    /// When it was added, for "added lately".
+    fn added_at(&self) -> u64 {
+        self.added.unwrap_or(self.modified)
+    }
+
     /// The series and the book's place in it, such as "Earthsea, book 2".
     pub fn series_text(&self) -> Option<String> {
         let series = self.series.as_ref()?;
@@ -78,13 +101,17 @@ impl Library {
     /// is left out, and tried again next time.
     pub(crate) fn refresh<R>(&mut self, books: &dyn Books<R>, device: &mut dyn Device) -> bool {
         let files = books.list();
-        let before = self.books.len();
-        self.books.retain(|entry| {
-            files.iter().any(|f| {
-                f.name == entry.file && f.size == entry.size && f.modified == entry.modified
-            })
-        });
-        let mut changed = self.books.len() != before;
+        // A file that changed is opened again, keeping what it's been
+        // through: a synced book downloaded again is still the same book.
+        let (kept, replaced): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut self.books)
+            .into_iter()
+            .partition(|entry| {
+                files.iter().any(|f| {
+                    f.name == entry.file && f.size == entry.size && f.modified == entry.modified
+                })
+            });
+        self.books = kept;
+        let mut changed = !replaced.is_empty();
         for file in files {
             if self.books.iter().any(|entry| entry.file == file.name) {
                 continue;
@@ -101,17 +128,21 @@ impl Library {
                 device.save(&cover_file(key), &small.to_bytes());
             });
             let manifest = book.manifest();
+            let before = replaced.iter().find(|entry| entry.file == file.name);
             self.books.push(Entry {
-                file: file.name,
-                size: file.size,
-                modified: file.modified,
                 key,
                 title: manifest.title.clone(),
                 authors: manifest.authors.clone(),
                 series: manifest.series.clone(),
                 cover: cover.is_some(),
-                opened: None,
-                progress: None,
+                opened: before.and_then(|entry| entry.opened),
+                progress: before.and_then(|entry| entry.progress),
+                id: before.and_then(|entry| entry.id.clone()),
+                revision: None,
+                added: before.and_then(|entry| entry.added),
+                file: file.name,
+                size: file.size,
+                modified: file.modified,
             });
             changed = true;
         }
@@ -120,6 +151,48 @@ impl Library {
 
     pub fn books(&self) -> &[Entry] {
         &self.books
+    }
+
+    /// Puts what the server says about each synced book over what its file
+    /// says: titles and the rest can be edited on the website. Returns
+    /// whether anything changed.
+    pub(crate) fn apply_sync(&mut self, state: &reader_sync::State) -> bool {
+        let mut changed = false;
+        for entry in &mut self.books {
+            let Some(synced) = state.book_for_file(&entry.file) else {
+                continue;
+            };
+            let book = &synced.book;
+            let revision = book
+                .file
+                .as_ref()
+                .filter(|file| synced.have.as_ref() == Some(&file.sha256))
+                .map(|file| file.revision);
+            let updated = Entry {
+                title: book.title.clone(),
+                authors: book.authors.clone(),
+                series: book.series.as_ref().map(|series| Series {
+                    name: series.name.clone(),
+                    index: series.index,
+                }),
+                id: Some(book.id.clone()),
+                // Kept if the file on hand isn't the one the server has now.
+                revision: revision.or(entry.revision),
+                added: u64::try_from(book.added).ok(),
+                ..entry.clone()
+            };
+            if updated != *entry {
+                *entry = updated;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    pub fn by_id(&self, id: &str) -> Option<&Entry> {
+        self.books
+            .iter()
+            .find(|entry| entry.id.as_deref() == Some(id))
     }
 
     pub fn get(&self, file: &str) -> Option<&Entry> {
@@ -158,8 +231,8 @@ impl Library {
     pub fn recently_added(&self) -> Vec<&Entry> {
         let mut added: Vec<&Entry> = self.books.iter().collect();
         added.sort_by(|a, b| {
-            b.modified
-                .cmp(&a.modified)
+            b.added_at()
+                .cmp(&a.added_at())
                 .then_with(|| a.title.cmp(&b.title))
         });
         added
@@ -371,6 +444,83 @@ mod tests {
         assert_eq!(library.get("b.book").unwrap().title, "B, second edition");
         assert!(library.get("a.book").is_none());
         assert_eq!(library.current(), None);
+    }
+
+    #[test]
+    fn synced_books_show_the_servers_details_and_keep_their_history() {
+        let id = "0b9e6c1e-6e0e-4c1a-9d43-1b1f3a7e2a10";
+        let file = format!("{id}.book");
+        let shelf = Shelf::default();
+        let first = book("Title in the file", None, false);
+        shelf.put(&file, first.clone(), 1);
+        shelf.put("own.book", book("Mine", None, false), 1);
+        let mut device = Files::default();
+        let mut library = Library::default();
+        library.refresh(&shelf, &mut device);
+
+        let synced = |sha256: &str, revision: i64| reader_sync::State {
+            books: [(
+                id.to_owned(),
+                reader_sync::Synced {
+                    book: reader_sync::Book {
+                        id: id.to_owned(),
+                        title: "Title on the website".to_owned(),
+                        authors: vec!["Someone".to_owned()],
+                        series: Some(sync_proto::Series {
+                            name: "Series".to_owned(),
+                            index: Some(2.0),
+                        }),
+                        file: Some(sync_proto::BookFile {
+                            size: 1,
+                            revision,
+                            sha256: sha256.to_owned(),
+                        }),
+                        cover: None,
+                        added: 500,
+                    },
+                    have: Some("a".to_owned()),
+                },
+            )]
+            .into(),
+            ..reader_sync::State::default()
+        };
+        assert!(library.apply_sync(&synced("a", 7)));
+        assert!(!library.apply_sync(&synced("a", 7)), "once is enough");
+        let entry = library.get(&file).unwrap().clone();
+        assert_eq!(entry.title, "Title on the website");
+        assert_eq!(entry.authors, ["Someone"]);
+        assert_eq!(entry.series_text().as_deref(), Some("Series, book 2"));
+        assert_eq!(entry.id.as_deref(), Some(id));
+        assert_eq!(entry.revision, Some(7));
+        assert_eq!(entry.added, Some(500));
+        assert_eq!(
+            library.by_id(id).map(|e| e.file.as_str()),
+            Some(file.as_str())
+        );
+        assert_eq!(library.get("own.book").unwrap().id, None, "not synced");
+        assert_ne!(entry.place_key(), entry.key);
+
+        // Made again on the server and downloaded: a new file, the same book.
+        library.opened(&file, 40);
+        library.set_progress(&file, 0.5);
+        shelf.put(
+            &file,
+            book("Title in the file, made better", None, false),
+            2,
+        );
+        assert!(library.refresh(&shelf, &mut device));
+        let again = library.get(&file).unwrap();
+        assert_ne!(again.key, entry.key, "its own page maps");
+        assert_eq!(again.place_key(), entry.place_key(), "the same place");
+        assert_eq!(again.opened, Some(40));
+        assert_eq!(again.progress, Some(0.5));
+        assert_eq!(again.revision, None, "not known until the sync says");
+        library.apply_sync(&synced("a", 8));
+        assert_eq!(library.get(&file).unwrap().revision, Some(8));
+
+        // Not yet the server's newest file: the revision on hand stays.
+        library.apply_sync(&synced("b", 9));
+        assert_eq!(library.get(&file).unwrap().revision, Some(8));
     }
 
     #[test]
