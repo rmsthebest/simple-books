@@ -1,0 +1,8 @@
+# rust-analyzer settings for this project, read by any editor.
+#
+# The server code is behind the `ssr` feature, so without it rust-analyzer
+# reports the server modules and their dependencies as missing. `hydrate` (the
+# WASM islands) can't be on at the same time, so code that is only for the
+# browser shows as inactive.
+[cargo]
+features = ["ssr"]
