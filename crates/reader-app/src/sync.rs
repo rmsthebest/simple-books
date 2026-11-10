@@ -170,6 +170,9 @@ pub(crate) fn summary(report: &Report) -> String {
             format!("{n} {many}")
         }
     };
+    if report.sent > 0 {
+        parts.push(count(report.sent, "place sent", "places sent"));
+    }
     if !report.downloaded.is_empty() {
         parts.push(count(
             report.downloaded.len(),
@@ -556,5 +559,21 @@ fn sync_once(
             send(Update::Unpaired);
         }
         Err(error) => send(Update::Failed(failure(&error))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_summary_counts_places_sent() {
+        assert_eq!(summary(&Report::default()), "everything was up to date.");
+        let report = Report {
+            sent: 1,
+            downloaded: vec!["a".into(), "b".into()],
+            ..Report::default()
+        };
+        assert_eq!(summary(&report), "1 place sent, 2 books downloaded.");
     }
 }

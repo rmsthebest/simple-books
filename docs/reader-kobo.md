@@ -29,7 +29,9 @@ The reader also writes, in `.adds/simple-books/`:
 - `pages-*.json`: each book's page map, so reopening is quick;
 - `preferences.json`: the settings, the library's sort, and the light once it's changed
   in the reader;
-- `sync-secret`, readable only by root: the key the server gave at pairing;
+- `sync-secret`: the key the server gave at pairing. The Kobo's storage is FAT, which
+  has no permissions, so anyone who plugs the Kobo in can copy it. Remove the reader on the
+  website's device page if the Kobo is lost;
 - `sync.json`: what the last sync got, so the next asks only for changes;
 - `sync-status.json`: who it's paired with and how the last sync went;
 - `books/{id}.book`, and `{id}.part` while downloading: books from the server;
