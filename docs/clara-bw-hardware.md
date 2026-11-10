@@ -66,8 +66,13 @@ coordinates.
 
 ## Display
 
-- **Framebuffer:** `/dev/fb0`, driver `hwtcon`, 1072×1448, 8 bits per pixel, stride 1072.
-  Upright portrait is the first mode it reports.
+- **Framebuffer:** `/dev/fb0`, driver `hwtcon`, 1072×1448. Nickel runs it at 32 bits per
+  pixel, stride 4288. KOReader sets 8 bits per pixel, `grayscale` 1 and `rotate` 3 with
+  `FBIOPUT_VSCREENINFO` (FBInk's `fbdepth -d 8 -R UR`), giving stride 1072, and restores
+  Nickel's settings on exit; the simple-books reader does the same. The driver accepts a
+  change of depth and ignores it unless `/sys/devices/platform/14000000.hwtcon/mdp_src_format`
+  is set to match first: `Y8` for 8 bits, `ABGR32` for 32. Upright portrait is the first
+  mode it reports.
 - **Updates:** draw into the mmapped framebuffer, then send an update ioctl with magic
   `'F'`. The definitions are in FBInk's `eink/mtk-kobo.h` (GPL-2.0, from MediaTek):
 

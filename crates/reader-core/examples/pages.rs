@@ -75,6 +75,13 @@ fn main() {
         book.manifest().title,
         paginated.as_secs_f64() * 1000.0 / total.max(1) as f64
     );
+    let sizes: Vec<usize> = map.chapters.iter().flatten().map(Vec::len).collect();
+    println!(
+        "{} chapters; the first has {} pages and the longest {}",
+        sizes.len(),
+        sizes.first().unwrap_or(&0),
+        sizes.iter().max().unwrap_or(&0)
+    );
 
     let mut reader = time_opens(&open, &settings, &map);
     if let Some(out) = &out {

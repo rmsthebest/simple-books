@@ -8,7 +8,7 @@
 
 use std::{
     fs::{File, OpenOptions},
-    io,
+    io::{self, Write},
     os::fd::{AsRawFd, BorrowedFd},
     time::Duration,
 };
@@ -21,6 +21,7 @@ const IOC_WRITE: u32 = 1;
 const IOC_READ: u32 = 2;
 
 const FBIOGET_VSCREENINFO: u32 = 0x4600;
+const FBIOPUT_VSCREENINFO: u32 = 0x4601;
 const FBIOGET_FSCREENINFO: u32 = 0x4602;
 const HWTCON_SEND_UPDATE: u32 = ioc(IOC_WRITE, b'F', 0x2E, size_of::<UpdateData>());
 const HWTCON_WAIT_FOR_UPDATE_COMPLETE: u32 =
@@ -58,6 +59,26 @@ pub(crate) enum Waveform {
     Gc16,
 }
 
+/// `fb_var_screeninfo`, as 40 `u32`s. These are the fields used here.
+type VarInfo = [u32; 40];
+const VAR_BITS: usize = 6;
+const VAR_GRAYSCALE: usize = 7;
+const VAR_ACTIVATE: usize = 21;
+const VAR_ROTATE: usize = 34;
+/// Apply the settings even if the driver thinks nothing changed.
+const FB_ACTIVATE_FORCE: u32 = 128;
+
+/// The screen as the reader draws it: one byte a pixel, gray, upright.
+/// KOReader sets the same, and these are the values it leaves. Nickel runs
+/// at 32 bits a pixel.
+const READER_BITS: u32 = 8;
+const READER_GRAYSCALE: u32 = 1;
+const READER_ROTATE: u32 = 3;
+
+/// Nickel's screen settings while the reader has changed them, so that
+/// `reader-kobo --restore-screen` can put them back after a crash.
+pub(crate) const SAVED_SCREEN: &str = "/tmp/simple-books-screen";
+
 /// `/dev/fb0`, mapped.
 pub(crate) struct Framebuffer {
     file: File,
@@ -69,6 +90,9 @@ pub(crate) struct Framebuffer {
     next_marker: u32,
     /// The update sent last, until it's known to have finished.
     pending: Option<u32>,
+    /// The settings found on opening, to restore on drop, if they had to
+    /// be changed.
+    original: Option<VarInfo>,
 }
 
 impl std::fmt::Debug for Framebuffer {
@@ -77,6 +101,7 @@ impl std::fmt::Debug for Framebuffer {
             .field("width", &self.width)
             .field("height", &self.height)
             .field("stride", &self.stride)
+            .field("original", &self.original.map(|v| Settings::of(&v)))
             .finish_non_exhaustive()
     }
 }
@@ -86,21 +111,138 @@ impl std::fmt::Debug for Framebuffer {
 const FIX_SMEM_LEN: usize = 16 + size_of::<usize>();
 const FIX_LINE_LENGTH: usize = FIX_SMEM_LEN + 4 * 4 + 3 * 2 + 2;
 
+/// The screen settings that matter here, for the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Settings {
+    bits: u32,
+    grayscale: u32,
+    rotate: u32,
+}
+
+impl Settings {
+    fn of(var: &VarInfo) -> Self {
+        Self {
+            bits: var[VAR_BITS],
+            grayscale: var[VAR_GRAYSCALE],
+            rotate: var[VAR_ROTATE],
+        }
+    }
+}
+
+fn get_var(file: &File) -> io::Result<VarInfo> {
+    let mut var = [0u32; 40];
+    // SAFETY: FBIOGET_VSCREENINFO writes one fb_var_screeninfo, which is
+    // 160 bytes, into the buffer, which is that size.
+    check(unsafe {
+        libc::ioctl(
+            file.as_raw_fd(),
+            request(FBIOGET_VSCREENINFO),
+            var.as_mut_ptr(),
+        )
+    })?;
+    Ok(var)
+}
+
+/// Sets the screen's settings. MediaTek's driver ignores a change of depth
+/// unless the display path's source format is changed to match first, as
+/// FBInk does in `fbink_set_fb_info`.
+fn put_var(file: &File, var: &VarInfo) -> io::Result<()> {
+    set_source_format(var[VAR_BITS])?;
+    let mut var = *var;
+    var[VAR_ACTIVATE] = FB_ACTIVATE_FORCE;
+    // SAFETY: FBIOPUT_VSCREENINFO reads and writes one fb_var_screeninfo,
+    // which is the buffer's size.
+    check(unsafe {
+        libc::ioctl(
+            file.as_raw_fd(),
+            request(FBIOPUT_VSCREENINFO),
+            var.as_mut_ptr(),
+        )
+    })
+}
+
+/// Writes the hwtcon display path's source pixel format for a depth: `Y8`
+/// for 8 bits and `ABGR32` for 32, the formats its kernel offers, with the
+/// trailing NUL FBInk writes. Nothing for other depths, or without hwtcon.
+fn set_source_format(bits: u32) -> io::Result<()> {
+    let format: &[u8] = match bits {
+        8 => b"Y8\0",
+        32 => b"ABGR32\0",
+        _ => return Ok(()),
+    };
+    for entry in std::fs::read_dir("/sys/devices/platform")? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().contains("hwtcon") {
+            let path = entry.path().join("mdp_src_format");
+            if path.exists() {
+                // One write, as FBInk does: the driver takes the name and
+                // reports the NUL unwritten, and a second write of just the
+                // NUL is an error.
+                let written = OpenOptions::new().write(true).open(path)?.write(format)?;
+                if written + 1 < format.len() {
+                    return Err(io::Error::other("hwtcon took part of the format name"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Puts back the screen settings a reader that didn't exit cleanly left
+/// changed. Does nothing if there are none saved.
+pub(crate) fn restore_screen() -> io::Result<()> {
+    let Ok(bytes) = std::fs::read(SAVED_SCREEN) else {
+        return Ok(());
+    };
+    let mut var = [0u32; 40];
+    if bytes.len() != size_of::<VarInfo>() {
+        return Err(io::Error::other(format!("{SAVED_SCREEN} is the wrong size")));
+    }
+    for (field, bytes) in var.iter_mut().zip(bytes.as_chunks::<4>().0) {
+        *field = u32::from_ne_bytes(*bytes);
+    }
+    let file = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
+    put_var(&file, &var)?;
+    std::fs::remove_file(SAVED_SCREEN)
+}
+
 impl Framebuffer {
     pub(crate) fn open() -> io::Result<Self> {
         let file = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
-        // fb_var_screeninfo is 40 u32s; xres, yres and bits_per_pixel are
-        // the first, second and seventh.
-        let mut var = [0u32; 40];
-        // SAFETY: FBIOGET_VSCREENINFO writes one fb_var_screeninfo, which
-        // is 160 bytes, into the buffer, which is that size.
-        check(unsafe {
-            libc::ioctl(
-                file.as_raw_fd(),
-                request(FBIOGET_VSCREENINFO),
-                var.as_mut_ptr(),
-            )
-        })?;
+        let found = get_var(&file)?;
+        let wanted = Settings {
+            bits: READER_BITS,
+            grayscale: READER_GRAYSCALE,
+            rotate: READER_ROTATE,
+        };
+        let original = if Settings::of(&found) == wanted {
+            None
+        } else {
+            let bytes: Vec<u8> = found.iter().flat_map(|f| f.to_ne_bytes()).collect();
+            std::fs::write(SAVED_SCREEN, bytes)?;
+            let mut var = found;
+            var[VAR_BITS] = wanted.bits;
+            var[VAR_GRAYSCALE] = wanted.grayscale;
+            var[VAR_ROTATE] = wanted.rotate;
+            put_var(&file, &var)?;
+            Some(found)
+        };
+        let framebuffer = Self::map(file, original);
+        if framebuffer.is_err()
+            && let Some(original) = &original
+        {
+            // Leave the screen as it was found.
+            let file = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
+            if put_var(&file, original).is_ok() {
+                let _ = std::fs::remove_file(SAVED_SCREEN);
+            }
+        }
+        framebuffer
+    }
+
+    /// Maps the framebuffer as it's now set up.
+    fn map(file: File, original: Option<VarInfo>) -> io::Result<Self> {
+        let var = get_var(&file)?;
         let mut fix = [0u8; 128];
         // SAFETY: fb_fix_screeninfo is 68 bytes on 32-bit and 80 on 64-bit;
         // the buffer is bigger than either.
@@ -113,7 +255,7 @@ impl Framebuffer {
         })?;
         let read_u32 =
             |at: usize| u32::from_ne_bytes([fix[at], fix[at + 1], fix[at + 2], fix[at + 3]]);
-        let (width, height, bits) = (var[0], var[1], var[6]);
+        let (width, height, bits) = (var[0], var[1], var[VAR_BITS]);
         let (len, stride) = (read_u32(FIX_SMEM_LEN) as usize, read_u32(FIX_LINE_LENGTH));
         if bits != 8 || stride < width || len < stride as usize * height as usize {
             return Err(io::Error::other(format!(
@@ -144,6 +286,7 @@ impl Framebuffer {
             stride,
             next_marker: 1,
             pending: None,
+            original,
         })
     }
 
@@ -212,6 +355,11 @@ impl Drop for Framebuffer {
         // SAFETY: unmapping exactly what `open` mapped, once.
         unsafe {
             libc::munmap(self.map.cast(), self.len);
+        }
+        if let Some(original) = &self.original
+            && put_var(&self.file, original).is_ok()
+        {
+            let _ = std::fs::remove_file(SAVED_SCREEN);
         }
     }
 }

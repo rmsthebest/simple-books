@@ -107,6 +107,8 @@ fi
 "${APP_DIR}/reader-kobo" "$@" </dev/null >/dev/null 2>&1
 status=$?
 say "reader-kobo exited with ${status}"
+# Nickel's screen settings, if the reader didn't get to restore them.
+"${APP_DIR}/reader-kobo" --restore-screen >>"${LOG}" 2>&1
 
 if [ "${VIA_NICKEL}" = true ]; then
     restart_nickel &

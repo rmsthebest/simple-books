@@ -2,7 +2,13 @@
 //!
 //! ```sh
 //! reader-kobo [book.book] [--dir /mnt/onboard/.adds/simple-books]
+//! reader-kobo --restore-screen
 //! ```
+//!
+//! The reader sets the screen to 8-bit gray, as KOReader does, and puts
+//! Nickel's settings back when it exits. `--restore-screen` does that after a
+//! reader that crashed or was killed, and nothing otherwise; `reader.sh` runs
+//! it every time.
 //!
 //! Started by `kobo/reader.sh` once Nickel is stopped, which restarts Nickel
 //! when this exits, however it exits. It reads the given book, or else the
@@ -76,6 +82,13 @@ pub(crate) fn write_log(message: std::fmt::Arguments<'_>) {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--restore-screen") {
+        if let Err(error) = sys::restore_screen() {
+            eprintln!("restoring the screen: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let dir = args
         .iter()
         .position(|a| a == "--dir")
