@@ -2,8 +2,9 @@
 
 The reader runs as an app launched from Nickelite, the way KOReader does: it stops
 Nickel, takes over the screen, and starts Nickel again when you leave it. Nickel stays
-installed and untouched. This is Phase 3 of the reader plan. It reads books already in
-the reader's own format (`.book`); a home screen, a library and sync come later.
+installed and untouched. It reads books already in the reader's own format (`.book`),
+and starts on its own home screen; a full library list, search, settings and sync come
+later.
 
 It needs Nickelite installed with its **Commands** permission on, as set up for
 KOReader in [`koreader-clara-bw.md`](koreader-clara-bw.md).
@@ -16,15 +17,19 @@ KOReader in [`koreader-clara-bw.md`](koreader-clara-bw.md).
 | `.adds/simple-books/reader.sh` | `kobo/reader.sh` | Stops Nickel, runs the reader, starts Nickel again |
 | `.adds/simple-books/ssh.sh` | `kobo/ssh.sh` | Starts and stops an SSH server from Nickel |
 | `.adds/nm/simple-books` | `kobo/nickelite-menu` | The **Simple Books**, **SSH on** and **SSH off** entries in the Nickelite tab |
-| `.adds/simple-books/books/*.book` | made by the server, or by hand (below) | Books. The newest one opens |
+| `.adds/simple-books/books/*.book` | made by the server, or by hand (below) | Books, on the home screen |
 
 The reader also writes, in `.adds/simple-books/`:
 
+- `library.json`: each book's title, authors, series, when it was last opened and how far
+  through it is, read from the books when they're added or changed;
+- `cover-*.pic`: each book's cover, decoded and shrunk once for the home screen;
 - `position-*.json`: the place in each book;
 - `pages-*.json`: each book's page map, so reopening is quick;
 - `preferences.json`: text size, darkness, contrast, and the light once it's changed in
   the reader;
-- `reader.log`: what happened, cut back once it passes 1 MB.
+- `reader.log`: what happened, including anything that took over 300 ms, such as opening
+  a book; cut back once it passes 1 MB.
 
 Nickel doesn't list anything under `.adds`, given the `ExcludeSyncFolders` line from the
 KOReader setup.
@@ -50,11 +55,14 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
 
 ## Using it
 
+- **The home screen** shows the book being read, with its cover and how far through it
+  is, then the books read lately and the books added lately. Tap any of them to open it
+  where it was left. **Exit to Nickel** is at the bottom.
 - **Turn pages** by tapping: the left third of the page goes back, anywhere else goes
   forward. Tap a link to follow it.
 - **The menu** opens with a tap along the top of the page. It has the front light and
-  warmth, text size, darkness and contrast, **Return** after following a link, and **Exit
-  to Nickel**. Tap below it to close it.
+  warmth, text size, darkness and contrast, **Return** after following a link, **Home**,
+  **Close** and **Exit to Nickel**. Tap below it to close it.
 - **Leave** with **Exit to Nickel** in the menu, or by holding the power button for 3
   seconds.
 - **Sleep** with a short press of the power button, or by leaving it alone for 10

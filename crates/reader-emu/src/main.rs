@@ -1,18 +1,20 @@
 //! The reader in a desktop window, shaped and timed like the Clara BW.
 //!
 //! ```sh
-//! cargo run --release -p reader-emu -- book.epub [--full]
+//! cargo run --release -p reader-emu -- [books-folder | book.epub | book.book]... [--full]
 //! ```
 //!
-//! Takes an EPUB (converted here, as the server would) or a converted book.
-//! The window is half size unless `--full` is given, since the page is
-//! 1448 pixels tall.
+//! Starts on the home screen, with the books in the given folder. EPUBs
+//! (converted here, as the server would) and converted books given instead
+//! are added to the emulator's own folder, `books/` in its cache directory,
+//! which is used when no folder is given. The window is half size unless
+//! `--full` is given, since the page is 1448 pixels tall.
 //!
 //! It runs the same [`Session`] as the Kobo, with the mouse as the finger:
 //!
 //! - Click the left third of the page to go back a page, and elsewhere to go
 //!   forward. Click a link to follow it, and the top of the page for the
-//!   menu.
+//!   menu. On the home screen, click a cover to open its book.
 //! - ← and Page Up go back, → Page Down and Space forward, and Backspace
 //!   returns from a link. `P` is the power button.
 //! - `+` and `-` change the text size, `H` toggles hyphenation, `J`
@@ -28,54 +30,57 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
-use std::{io::Cursor, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    fs::File,
+    io::Cursor,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Instant, SystemTime},
+};
 
-use book_format::{BookReader, Limits};
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
 use reader_app::{
-    Battery, Device, Event, Flow, Light, Opener, Preferences, Refresh, Session, Turn,
+    Battery, Device, Event, Flow, Folder, Light, Preferences, Refresh, Session, Turn,
 };
 use reader_core::{Canvas, Settings};
 
-type Source = Cursor<Vec<u8>>;
-
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(path) = args
-        .iter()
-        .find(|a| !a.starts_with("--"))
-        .map(PathBuf::from)
-    else {
-        eprintln!("usage: reader-emu <book.epub | book.book> [--full]");
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        eprintln!("usage: reader-emu [books-folder | book.epub | book.book]... [--full]");
         std::process::exit(2);
-    };
+    }
     let divisor = if args.iter().any(|a| a == "--full") {
         1
     } else {
         2
     };
 
-    let bytes = match load(&path) {
-        Ok(bytes) => Arc::new(bytes),
-        Err(error) => {
+    let settings = Settings::default();
+    let mut panel = Panel::new(settings.width, settings.height);
+    let Some(own) = panel.dir.as_ref().map(|dir| dir.join("books")) else {
+        eprintln!("no cache directory: set XDG_CACHE_HOME or HOME");
+        std::process::exit(1);
+    };
+    let mut folder = own.clone();
+    for arg in args.iter().filter(|a| !a.starts_with("--")) {
+        let path = PathBuf::from(arg);
+        if path.is_dir() {
+            folder = path;
+        } else if let Err(error) = add(&path, &own) {
             eprintln!("{}: {error}", path.display());
             std::process::exit(1);
         }
-    };
-    let mut hash = Fnv::default();
-    hash.write(&bytes);
-    let book_key = hash.0;
-    let open: Opener<Source> =
-        Arc::new(move || BookReader::open(Cursor::new(bytes.as_ref().clone()), Limits::default()));
+    }
+    println!("books in {}", folder.display());
 
-    let settings = Settings::default();
-    let mut panel = Panel::new(settings.width, settings.height);
     let started = Instant::now();
-    let mut session = Session::start(open, book_key, &mut panel, started).unwrap_or_else(|error| {
-        eprintln!("can't open the book: {error}");
+    let books = Arc::new(Folder::new(folder));
+    let mut session = Session::start(books, &mut panel, started).unwrap_or_else(|error| {
+        eprintln!("can't start: {error}");
         std::process::exit(1);
     });
-    println!("opened in {:?}", started.elapsed());
+    println!("home in {:?}", started.elapsed());
 
     let (width, height) = (
         settings.width as usize / divisor,
@@ -140,7 +145,7 @@ fn main() {
         }
     }
     session.save(&mut panel);
-    if let Some(position) = session.reader().position() {
+    if let Some(position) = session.reader().and_then(reader_core::Reader::position) {
         println!("left at {position:?}");
     }
 }
@@ -182,9 +187,12 @@ fn print_preferences(p: &Preferences) {
     );
 }
 
-fn title(session: &Session<Source>) -> String {
+fn title(session: &Session<File>) -> String {
     use std::fmt::Write;
-    let reader = session.reader();
+    let reader = match session.reader() {
+        Some(reader) if !session.at_home() => reader,
+        _ => return format!("reader-emu — {} books", session.library().books().len()),
+    };
     let map = reader.page_map();
     let page = reader.current();
     let number = page.and_then(|p| map.number(p)).map(|n| n + 1);
@@ -213,9 +221,11 @@ fn title(session: &Session<Source>) -> String {
     title
 }
 
-fn load(path: &PathBuf) -> Result<Vec<u8>, String> {
+/// Adds an EPUB, converted, or a converted book to the folder `books`, as
+/// `<name>.book`.
+fn add(path: &Path, books: &Path) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    if path
+    let bytes = if path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("epub"))
     {
@@ -226,10 +236,18 @@ fn load(path: &PathBuf) -> Result<Vec<u8>, String> {
             &book_convert::Options::default(),
         )
         .map_err(|e| e.to_string())?;
-        Ok(out.into_inner())
+        out.into_inner()
     } else {
-        Ok(bytes)
+        bytes
+    };
+    let name = path.file_stem().ok_or("no file name")?;
+    let to = books.join(name).with_extension("book");
+    // Rewriting the same book would make it look newly added.
+    if std::fs::read(&to).is_ok_and(|old| old == bytes) {
+        return Ok(());
     }
+    std::fs::create_dir_all(books).map_err(|e| e.to_string())?;
+    std::fs::write(&to, bytes).map_err(|e| e.to_string())
 }
 
 /// The emulated panel and the rest of the device.
@@ -318,6 +336,12 @@ impl Device for Panel {
             let _ = std::fs::write(dir.join(name), bytes);
         }
     }
+
+    fn clock(&mut self) -> u64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs())
+    }
 }
 
 /// What the window shows while a refresh is under way.
@@ -356,22 +380,4 @@ impl Shown<'_> {
 fn rgb(gray: u8) -> u32 {
     let g = u32::from(gray);
     (g << 16) | (g << 8) | g
-}
-
-/// 64-bit FNV-1a, to tell books apart.
-struct Fnv(u64);
-
-impl Default for Fnv {
-    fn default() -> Self {
-        Self(0xcbf2_9ce4_8422_2325)
-    }
-}
-
-impl Fnv {
-    fn write(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            self.0 ^= u64::from(*byte);
-            self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
-        }
-    }
 }

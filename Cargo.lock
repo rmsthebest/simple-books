@@ -2843,6 +2843,7 @@ name = "reader-app"
 version = "0.1.0"
 dependencies = [
  "book-format",
+ "image",
  "reader-core",
  "serde",
  "serde_json",

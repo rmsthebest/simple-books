@@ -20,6 +20,7 @@ mod fonts;
 mod guard;
 mod knuth_plass;
 mod paginate;
+mod picture;
 mod reader;
 mod render;
 mod scale;
@@ -30,6 +31,7 @@ use serde::{Deserialize, Serialize};
 pub use canvas::Canvas;
 pub use guard::TurnGuard;
 pub use paginate::{PageMap, PageRef, PageStart, paginate};
+pub use picture::Picture;
 pub use reader::{Reader, ReaderError, Turn, paginate_book};
 pub use typeset::Typesetter;
 

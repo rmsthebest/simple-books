@@ -3,16 +3,19 @@
 
 use std::{
     collections::HashMap,
-    io::Cursor,
+    io::{self, Cursor},
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use book_format::{Align, Block, BlockKind, BookReader, Chapter, Limits, Position, Span};
-use reader_app::{
-    AUTO_SLEEP, Battery, Device, Event, FULL_EVERY, Flow, Light, Opener, Refresh, SLEEP_RETRY,
-    SUSPEND_DELAY, Session, Turn,
+use book_format::{
+    Align, Block, BlockKind, BookReader, Chapter, FormatError, Limits, Position, Span,
 };
+use reader_app::{
+    AUTO_SLEEP, Battery, BookFile, Books, Device, Event, FULL_EVERY, Flow, Light, Refresh,
+    SLEEP_RETRY, SUSPEND_DELAY, Session, Turn,
+};
+use reader_core::Reader;
 
 const WORDS: &[&str] = &[
     "the", "road", "ran", "south", "through", "a", "gray", "country", "of", "ash", "and", "rain",
@@ -59,9 +62,56 @@ fn book() -> Vec<u8> {
     out.into_inner()
 }
 
-fn opener(bytes: Vec<u8>) -> Opener<Cursor<Vec<u8>>> {
-    let bytes = Arc::new(bytes);
-    Arc::new(move || BookReader::open(Cursor::new(bytes.as_ref().clone()), Limits::default()))
+/// The test book, and a second, smaller one.
+const BOOK: &str = "test.book";
+const OTHER: &str = "other.book";
+
+struct Shelf(HashMap<String, Vec<u8>>);
+
+impl Shelf {
+    fn new() -> Self {
+        let mut other = Cursor::new(Vec::new());
+        book_format::write(
+            &mut other,
+            book_format::About {
+                title: "Other book".into(),
+                ..book_format::About::default()
+            },
+            Vec::new(),
+            &[Chapter {
+                blocks: (200..210).map(paragraph).collect(),
+            }],
+            &[],
+        )
+        .unwrap();
+        Self(HashMap::from([
+            (BOOK.to_owned(), book()),
+            (OTHER.to_owned(), other.into_inner()),
+        ]))
+    }
+}
+
+impl Books<Cursor<Vec<u8>>> for Shelf {
+    fn list(&self) -> Vec<BookFile> {
+        self.0
+            .iter()
+            .map(|(name, bytes)| BookFile {
+                name: name.clone(),
+                size: bytes.len() as u64,
+                // The test book was added last.
+                modified: if name == BOOK { 2 } else { 1 },
+            })
+            .collect()
+    }
+    fn read(&self, name: &str) -> io::Result<Vec<u8>> {
+        self.0
+            .get(name)
+            .cloned()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+    }
+    fn open(&self, name: &str) -> Result<BookReader<Cursor<Vec<u8>>>, FormatError> {
+        BookReader::open(Cursor::new(self.read(name)?), Limits::default())
+    }
 }
 
 #[derive(Default)]
@@ -74,6 +124,7 @@ struct Fake {
     can_suspend: bool,
     suspended: u32,
     files: HashMap<String, Vec<u8>>,
+    clock: u64,
 }
 
 impl Device for Fake {
@@ -107,6 +158,10 @@ impl Device for Fake {
     fn save(&mut self, name: &str, bytes: &[u8]) {
         self.files.insert(name.to_owned(), bytes.to_vec());
     }
+    fn clock(&mut self) -> u64 {
+        self.clock += 1;
+        self.clock
+    }
 }
 
 struct Run {
@@ -123,14 +178,28 @@ impl Run {
         })
     }
 
-    fn with(mut device: Fake) -> Self {
+    /// Starts on the home screen, then opens the test book, with what was
+    /// shown so far forgotten.
+    fn with(device: Fake) -> Self {
+        let mut run = Self::at_home(device);
+        run.device.shown.clear();
+        run.session.open(BOOK, &mut run.device, run.now).unwrap();
+        run
+    }
+
+    fn at_home(mut device: Fake) -> Self {
         let now = Instant::now();
-        let session = Session::start(opener(book()), 7, &mut device, now).unwrap();
+        let session = Session::start(Arc::new(Shelf::new()), &mut device, now).unwrap();
+        assert!(session.at_home());
         Self {
             session,
             device,
             now,
         }
+    }
+
+    fn reader(&self) -> &Reader<Cursor<Vec<u8>>> {
+        self.session.reader().expect("a book is open")
     }
 
     /// Sends an event a second after the last one, past the turn guard.
@@ -154,7 +223,7 @@ impl Run {
     }
 
     fn page(&self) -> Option<reader_core::PageRef> {
-        self.session.reader().current()
+        self.reader().current()
     }
 }
 
@@ -270,12 +339,12 @@ fn bigger_text_keeps_the_place() {
     for _ in 0..8 {
         run.tap(FORWARD.0, FORWARD.1);
     }
-    let before = run.session.reader().position().unwrap();
+    let before = run.reader().position().unwrap();
     run.tap(MENU.0, MENU.1);
     // Text size's + button, on the fourth row.
     run.tap(1072.0 - 64.0 - 52.0, 3.0 * 120.0 + 60.0);
-    assert_eq!(run.session.reader().settings().font_size, 44.0);
-    let after = run.session.reader().position().unwrap();
+    assert_eq!(run.reader().settings().font_size, 44.0);
+    let after = run.reader().position().unwrap();
     assert_eq!(after.chapter, before.chapter);
     // The page starts at or before where the old one did.
     assert!(after <= before, "{after:?} after {before:?}");
@@ -378,7 +447,7 @@ fn a_refused_suspend_is_tried_again() {
 /// Whether the page starts with the line that held `first`: in the same
 /// block, at most a line's worth of characters before it.
 fn starts_with_the_line_of(run: &Run, first: Position) -> bool {
-    let at = run.session.reader().position().unwrap();
+    let at = run.reader().position().unwrap();
     at.chapter == first.chapter
         && at.block == first.block
         && at.offset <= first.offset
@@ -391,18 +460,18 @@ fn stepping_darkness_keeps_the_first_line_at_the_top() {
     for _ in 0..8 {
         run.tap(FORWARD.0, FORWARD.1);
     }
-    let before = run.session.reader().position().unwrap();
+    let before = run.reader().position().unwrap();
     run.tap(MENU.0, MENU.1);
     for _ in 0..3 {
         run.tap(DARKER.0, DARKER.1);
         assert!(starts_with_the_line_of(&run, before));
     }
-    assert_eq!(run.session.reader().settings().weight, 550.0);
+    assert_eq!(run.reader().settings().weight, 550.0);
     for _ in 0..3 {
         run.tap(LIGHTER.0, LIGHTER.1);
     }
-    assert_eq!(run.session.reader().settings().weight, 400.0);
-    assert_eq!(run.session.reader().position(), Some(before));
+    assert_eq!(run.reader().settings().weight, 400.0);
+    assert_eq!(run.reader().position(), Some(before));
 }
 
 #[test]
@@ -411,7 +480,7 @@ fn stepping_text_size_keeps_the_first_line_at_the_top() {
     for _ in 0..7 {
         run.tap(FORWARD.0, FORWARD.1);
     }
-    let before = run.session.reader().position().unwrap();
+    let before = run.reader().position().unwrap();
     // Mid-paragraph, so the line breaks around it really change.
     assert_ne!(before.offset, 0);
     run.tap(MENU.0, MENU.1);
@@ -420,15 +489,15 @@ fn stepping_text_size_keeps_the_first_line_at_the_top() {
         assert!(
             starts_with_the_line_of(&run, before),
             "{:?} for {before:?}",
-            run.session.reader().position()
+            run.reader().position()
         );
     }
-    assert_eq!(run.session.reader().settings().font_size, 52.0);
+    assert_eq!(run.reader().settings().font_size, 52.0);
     for _ in 0..3 {
         run.tap(SMALLER.0, SMALLER.1);
     }
-    assert_eq!(run.session.reader().settings().font_size, 40.0);
-    assert_eq!(run.session.reader().position(), Some(before));
+    assert_eq!(run.reader().settings().font_size, 40.0);
+    assert_eq!(run.reader().position(), Some(before));
 }
 
 #[test]
@@ -442,7 +511,7 @@ fn a_link_goes_there_and_the_menu_returns() {
                 .step_by(8)
                 .map(move |x| (f32::from(x), f32::from(y)))
         })
-        .find(|(x, y)| run.session.reader().link_at(*x, *y).is_some())
+        .find(|(x, y)| run.reader().link_at(*x, *y).is_some())
         .expect("the link is on the first page");
     run.tap(link.0, link.1);
     assert_eq!(run.page().map(|p| p.chapter), Some(1));
@@ -463,13 +532,13 @@ fn the_page_map_is_saved_once_the_book_is_paginated() {
         run.send(Event::Tick);
     }
     assert!(run.device.files.keys().any(|k| k.starts_with("pages-")));
-    assert!(run.session.reader().page_map().is_complete());
+    assert!(run.reader().page_map().is_complete());
     // The next start uses it and paginates nothing more.
     let again = Run::with(Fake {
         files: run.device.files.clone(),
         ..Fake::default()
     });
-    assert!(again.session.reader().page_map().is_complete());
+    assert!(again.reader().page_map().is_complete());
 }
 
 #[test]
@@ -492,4 +561,94 @@ fn exit_leaves_from_anywhere_and_saves_the_place() {
     run.device.can_suspend = false;
     run.send(Event::Power);
     assert_eq!(run.send(Event::Exit), Flow::Exit);
+}
+
+/// On the home screen: the book being read, the first cover in the first
+/// row, and Exit to Nickel along the bottom.
+const CURRENT: (f32, f32) = (500.0, 300.0);
+const FIRST_TILE: (f32, f32) = (140.0, 750.0);
+const HOME_EXIT: (f32, f32) = (536.0, 1376.0);
+/// The menu's Home button, first on the bottom row when there's nowhere to
+/// return to.
+const MENU_HOME: (f32, f32) = (150.0, 6.0 * 120.0 + 60.0);
+
+#[test]
+fn it_starts_at_home_with_the_books_listed() {
+    let run = Run::at_home(Fake::default());
+    assert_eq!(run.device.shown, [Refresh::Full]);
+    let added: Vec<&str> = run
+        .session
+        .library()
+        .recently_added()
+        .iter()
+        .map(|e| e.file.as_str())
+        .collect();
+    assert_eq!(added, [BOOK, OTHER]);
+    assert!(run.session.reader().is_none());
+    assert!(run.device.files.contains_key("library.json"));
+}
+
+#[test]
+fn home_from_the_menu_and_back_to_the_same_page() {
+    let mut run = Run::new();
+    for _ in 0..3 {
+        run.tap(FORWARD.0, FORWARD.1);
+    }
+    let page = run.page();
+    run.tap(MENU.0, MENU.1);
+    run.tap(MENU_HOME.0, MENU_HOME.1);
+    assert!(run.session.at_home());
+    let current = run.session.library().current().unwrap();
+    assert_eq!(current.file, BOOK);
+    assert!(current.progress.is_some_and(|p| p > 0.0 && p < 1.0));
+    // The book being read, from the top of the home screen.
+    run.tap(CURRENT.0, CURRENT.1);
+    assert!(!run.session.at_home());
+    assert_eq!(run.page(), page);
+}
+
+#[test]
+fn another_book_opens_and_the_first_keeps_its_place() {
+    let mut run = Run::new();
+    for _ in 0..3 {
+        run.tap(FORWARD.0, FORWARD.1);
+    }
+    let page = run.page();
+    run.tap(MENU.0, MENU.1);
+    run.tap(MENU_HOME.0, MENU_HOME.1);
+    // Only one book has been read, so the first row is the books added,
+    // without the one being read.
+    run.tap(FIRST_TILE.0, FIRST_TILE.1);
+    assert_eq!(run.reader().manifest().title, "Other book");
+    run.tap(MENU.0, MENU.1);
+    run.tap(MENU_HOME.0, MENU_HOME.1);
+    assert_eq!(
+        run.session.library().current().map(|e| e.file.as_str()),
+        Some(OTHER)
+    );
+    // The test book is now the first of the books read lately.
+    run.tap(FIRST_TILE.0, FIRST_TILE.1);
+    assert_eq!(run.reader().manifest().title, "Test book");
+    assert_eq!(run.page(), page);
+}
+
+#[test]
+fn asleep_at_home_it_wakes_at_home() {
+    let mut run = Run::at_home(Fake {
+        can_suspend: true,
+        ..Fake::default()
+    });
+    let home = run.device.last;
+    run.send(Event::Power);
+    assert_ne!(run.device.last, home, "the sleep screen is up");
+    run.tick_after(SUSPEND_DELAY);
+    assert_eq!(run.device.suspended, 1);
+    assert!(run.session.at_home());
+    assert_eq!(run.device.last, home);
+}
+
+#[test]
+fn exit_from_home() {
+    let mut run = Run::at_home(Fake::default());
+    assert_eq!(run.tap(HOME_EXIT.0, HOME_EXIT.1), Flow::Exit);
 }

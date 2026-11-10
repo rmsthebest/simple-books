@@ -4,6 +4,8 @@
 
 use reader_core::{Canvas, Typesetter};
 
+use crate::ui::{self, BORDER, LABEL_SIZE, Rect};
+
 /// What a menu button does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Action {
@@ -14,6 +16,7 @@ pub(crate) enum Action {
     Contrast(Step),
     /// Return from the last link followed.
     Return,
+    Home,
     Close,
     Exit,
 }
@@ -36,20 +39,6 @@ pub(crate) struct Values {
     pub darkness: String,
     pub contrast: String,
     pub can_return: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Rect {
-    left: f32,
-    top: f32,
-    width: f32,
-    height: f32,
-}
-
-impl Rect {
-    fn contains(&self, x: f32, y: f32) -> bool {
-        x >= self.left && x < self.left + self.width && y >= self.top && y < self.top + self.height
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -82,9 +71,7 @@ const STEPPED: [(&str, StepAction); 5] = [
     ("Contrast", Action::Contrast),
 ];
 
-const LABEL_SIZE: f32 = 40.0;
 const TITLE_SIZE: f32 = 44.0;
-const BORDER: u32 = 3;
 
 impl Layout {
     pub(crate) fn new(width: u32, can_return: bool) -> Self {
@@ -112,25 +99,30 @@ impl Layout {
             }
             top += row;
         }
-        let mut bottom_row: Vec<(Action, &'static str)> = Vec::new();
+        // Each button's share of the row: the long label gets two.
+        let mut bottom_row: Vec<(Action, &'static str, f32)> = Vec::new();
         if can_return {
-            bottom_row.push((Action::Return, "Return"));
+            bottom_row.push((Action::Return, "Return", 1.0));
         }
-        bottom_row.push((Action::Close, "Close"));
-        bottom_row.push((Action::Exit, "Exit to Nickel"));
+        bottom_row.push((Action::Home, "Home", 1.0));
+        bottom_row.push((Action::Close, "Close", 1.0));
+        bottom_row.push((Action::Exit, "Exit to Nickel", 2.0));
         let count = bottom_row.len() as f32;
-        let each = (width - 2.0 * margin - gap * (count - 1.0)) / count;
-        for (i, (action, label)) in bottom_row.into_iter().enumerate() {
+        let shares: f32 = bottom_row.iter().map(|(_, _, share)| share).sum();
+        let unit = (width - 2.0 * margin - gap * (count - 1.0)) / shares;
+        let mut left = margin;
+        for (action, label, share) in bottom_row {
             buttons.push(Button {
                 rect: Rect {
-                    left: margin + i as f32 * (each + gap),
+                    left,
                     top: top + gap / 2.0,
-                    width: each,
+                    width: unit * share,
                     height: button,
                 },
                 action,
                 label,
             });
+            left += unit * share + gap;
         }
         let bottom = top + row + gap;
         Self {
@@ -164,7 +156,7 @@ impl Layout {
         // The title, shortened to leave room for the battery.
         let battery_width = ui.label_width(&values.battery, LABEL_SIZE, 400.0);
         let room = self.width - 2.0 * self.margin - battery_width - 32.0;
-        let title = fit(ui, &values.title, TITLE_SIZE, 600.0, room);
+        let title = ui::fit(ui, &values.title, TITLE_SIZE, 600.0, room);
         let baseline = self.row * 0.62;
         ui.draw_label(canvas, &title, (self.margin, baseline), TITLE_SIZE, 600.0);
         ui.draw_label(
@@ -199,61 +191,13 @@ impl Layout {
             );
         }
         for button in &self.buttons {
-            draw_button(canvas, ui, button);
+            ui::button(canvas, ui, button.rect, button.label);
         }
     }
-}
-
-fn draw_button(canvas: &mut Canvas, ui: &mut Typesetter, button: &Button) {
-    let r = button.rect;
-    let (left, top) = (r.left.round() as i32, r.top.round() as i32);
-    let (width, height) = (r.width.round() as u32, r.height.round() as u32);
-    canvas.fill(left, top, width, height, 0);
-    let inset = BORDER as i32;
-    canvas.fill(
-        left + inset,
-        top + inset,
-        width.saturating_sub(2 * BORDER),
-        height.saturating_sub(2 * BORDER),
-        255,
-    );
-    let size = if button.label.chars().count() == 1 {
-        64.0
-    } else {
-        LABEL_SIZE
-    };
-    let label_width = ui.label_width(button.label, size, 500.0);
-    let x = r.left + (r.width - label_width) / 2.0;
-    let baseline = r.top + r.height / 2.0 + size * 0.33;
-    ui.draw_label(canvas, button.label, (x, baseline), size, 500.0);
-}
-
-/// `text`, cut short with an ellipsis if it's wider than `room`.
-fn fit(ui: &mut Typesetter, text: &str, size: f32, weight: f32, room: f32) -> String {
-    if ui.label_width(text, size, weight) <= room {
-        return text.to_owned();
-    }
-    let chars: Vec<char> = text.chars().collect();
-    let mut keep = chars.len();
-    while keep > 0 {
-        keep -= 1;
-        let shortened: String = chars[..keep]
-            .iter()
-            .collect::<String>()
-            .trim_end()
-            .to_owned()
-            + "…";
-        if ui.label_width(&shortened, size, weight) <= room {
-            return shortened;
-        }
-    }
-    "…".to_owned()
 }
 
 #[cfg(test)]
 mod tests {
-    use reader_core::Settings;
-
     use super::*;
 
     #[test]
@@ -285,15 +229,5 @@ mod tests {
             assert_eq!(layout.hit(x, y), Some(button.action));
         }
         assert_eq!(layout.hit(10.0, 10.0), None);
-    }
-
-    #[test]
-    fn long_titles_are_shortened() {
-        let mut ui = Typesetter::new(Settings::default(), Some("en"));
-        let long = "A Smarter Way to Learn HTML & CSS: Learn it faster. Remember it longer.";
-        let short = fit(&mut ui, long, TITLE_SIZE, 600.0, 600.0);
-        assert!(short.ends_with('…'), "{short}");
-        assert!(ui.label_width(&short, TITLE_SIZE, 600.0) <= 600.0);
-        assert_eq!(fit(&mut ui, "Milkman", TITLE_SIZE, 600.0, 600.0), "Milkman");
     }
 }

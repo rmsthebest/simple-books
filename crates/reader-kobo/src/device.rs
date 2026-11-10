@@ -135,6 +135,12 @@ impl Device for Kobo {
         fs::read(self.dir.join(name)).ok()
     }
 
+    fn clock(&mut self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs())
+    }
+
     fn save(&mut self, name: &str, bytes: &[u8]) {
         if let Err(error) = save_atomically(&self.dir.join(name), bytes) {
             log!("saving {name}: {error}");

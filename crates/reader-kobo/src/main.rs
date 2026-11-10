@@ -1,7 +1,7 @@
 //! The simple-books reader on the Kobo Clara BW.
 //!
 //! ```sh
-//! reader-kobo [book.book] [--dir /mnt/onboard/.adds/simple-books]
+//! reader-kobo [--dir /mnt/onboard/.adds/simple-books]
 //! reader-kobo --restore-screen
 //! ```
 //!
@@ -11,9 +11,10 @@
 //! it every time.
 //!
 //! Started by `kobo/reader.sh` once Nickel is stopped, which restarts Nickel
-//! when this exits, however it exits. It reads the given book, or else the
-//! newest `.book` in the app folder's `books/`. The app folder holds the
-//! saved places, preferences and page maps, and `reader.log`.
+//! when this exits, however it exits. It starts on the home screen, with the
+//! `.book` files in the app folder's `books/`. The app folder also holds the
+//! library index, covers, saved places, preferences and page maps, and
+//! `reader.log`.
 //!
 //! It runs the same [`Session`] as the emulator:
 //!
@@ -41,8 +42,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use book_format::{BookReader, Limits};
-use reader_app::{Event, Flow, Opener, Session};
+use reader_app::{Event, Flow, Folder, Session};
 
 use crate::{
     device::Kobo,
@@ -57,6 +57,9 @@ const COVER: &str = "/dev/input/event0";
 /// Holding the power button this long leaves for Nickel, even if the touch
 /// panel isn't working. Shorter presses sleep.
 const HOLD_TO_EXIT: Duration = Duration::from_secs(3);
+/// Handling an event that takes this long is logged, such as opening a
+/// book.
+const SLOW: Duration = Duration::from_millis(300);
 /// The log is cut back to its end when it grows past this.
 const LOG_LIMIT: u64 = 1 << 20;
 
@@ -94,15 +97,10 @@ fn main() {
         .position(|a| a == "--dir")
         .and_then(|at| args.get(at + 1))
         .map_or_else(|| PathBuf::from(APP_DIR), PathBuf::from);
-    let book = args
-        .iter()
-        .enumerate()
-        .find(|(i, a)| !a.starts_with("--") && (*i == 0 || args[i - 1] != "--dir"))
-        .map(|(_, a)| PathBuf::from(a));
     open_log(&dir);
     std::panic::set_hook(Box::new(|info| log!("panic: {info}")));
     log!("starting");
-    match run(&dir, book) {
+    match run(&dir) {
         Ok(()) => log!("back to Nickel"),
         Err(error) => {
             log!("stopping: {error}");
@@ -127,19 +125,7 @@ fn open_log(dir: &Path) {
     }
 }
 
-fn run(dir: &Path, book: Option<PathBuf>) -> io::Result<()> {
-    let book = match book {
-        Some(book) => book,
-        None => newest_book(&dir.join("books"))?,
-    };
-    log!("reading {}", book.display());
-    let book_key = fnv(&fs::read(&book)?);
-    let path = Arc::new(book);
-    let open: Opener<File> = Arc::new(move || {
-        let file = File::open(path.as_ref())?;
-        BookReader::open(file, Limits::default())
-    });
-
+fn run(dir: &Path) -> io::Result<()> {
     let framebuffer = Framebuffer::open()?;
     log!("{framebuffer:?}");
     let width = framebuffer.width;
@@ -151,9 +137,13 @@ fn run(dir: &Path, book: Option<PathBuf>) -> io::Result<()> {
     let cover = open_input(COVER).ok();
 
     let started = Instant::now();
-    let mut session =
-        Session::start(open, book_key, &mut kobo, started).map_err(io::Error::other)?;
-    log!("opened in {:?}", started.elapsed());
+    let books = Arc::new(Folder::new(dir.join("books")));
+    let mut session = Session::start(books, &mut kobo, started).map_err(io::Error::other)?;
+    log!(
+        "home in {:?}, {} books",
+        started.elapsed(),
+        session.library().books().len()
+    );
 
     let mut taps = Touch::default();
     // When the power button went down, if it's down. A release with no
@@ -205,7 +195,17 @@ fn run(dir: &Path, book: Option<PathBuf>) -> io::Result<()> {
             events.push(Event::Tick);
         }
         for event in events {
-            match session.handle(event, now, &mut kobo) {
+            let handling = Instant::now();
+            let flow = session.handle(event, now, &mut kobo);
+            if handling.elapsed() >= SLOW {
+                let open = session.reader().map(|r| r.manifest().title.clone());
+                log!(
+                    "{event:?} took {:?}; at home: {}, book: {open:?}",
+                    handling.elapsed(),
+                    session.at_home()
+                );
+            }
+            match flow {
                 Ok(Flow::Continue) => {}
                 Ok(Flow::Exit) => return Ok(()),
                 Err(error) => return Err(io::Error::other(error)),
@@ -234,32 +234,4 @@ fn read_events(mut device: &File) -> Vec<RawEvent> {
         }
     }
     events
-}
-
-/// The most recently changed `.book` in `dir`.
-fn newest_book(dir: &Path) -> io::Result<PathBuf> {
-    let mut newest: Option<(SystemTime, PathBuf)> = None;
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.extension().is_none_or(|e| e != "book") {
-            continue;
-        }
-        let modified = fs::metadata(&path)?.modified()?;
-        if newest.as_ref().is_none_or(|(t, _)| modified > *t) {
-            newest = Some((modified, path));
-        }
-    }
-    newest.map(|(_, path)| path).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("no .book in {}", dir.display()),
-        )
-    })
-}
-
-/// 64-bit FNV-1a, to tell books apart.
-fn fnv(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
-    })
 }

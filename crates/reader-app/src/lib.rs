@@ -1,6 +1,9 @@
 //! The reader app without any device code: what a tap, the power button or
 //! the passing of time does, and what goes on the screen.
 //!
+//! It starts on the home screen ([`home`]), with the books the platform
+//! lists through [`Books`], kept in a [`Library`].
+//!
 //! A platform (the desktop emulator, or the Kobo) turns its input into
 //! [`Event`]s for [`Session::handle`], and does what the session asks
 //! through [`Device`]. Between events it waits until
@@ -21,24 +24,27 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
+mod book;
+mod folder;
+mod home;
+mod library;
 mod menu;
+mod ui;
 
 use std::{
-    io::{Read, Seek},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    collections::HashMap,
+    io::{self, Read, Seek},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
-use book_format::{BookReader, FormatError, Position};
+use book_format::{BookReader, FormatError};
 pub use reader_core::Turn;
-use reader_core::{
-    Canvas, PageMap, Reader, ReaderError, Settings, TurnGuard, Typesetter, paginate_book,
-};
+use reader_core::{Canvas, Picture, Reader, ReaderError, Settings, TurnGuard, Typesetter};
 use serde::{Deserialize, Serialize};
+
+pub use folder::Folder;
+pub use library::{Entry, Library};
 
 /// A full refresh every this many turns clears ghosting.
 pub const FULL_EVERY: u32 = 6;
@@ -61,9 +67,6 @@ const SAVE_EVERY: u32 = 10;
 /// A tap this far down the screen, as a fraction of its height, opens the
 /// menu.
 const MENU_BAND: f32 = 0.1;
-
-/// Opens the book afresh, for the reader and for background pagination.
-pub type Opener<R> = Arc<dyn Fn() -> Result<BookReader<R>, FormatError> + Send + Sync>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -137,6 +140,35 @@ pub trait Device {
     fn suspend(&mut self) -> bool;
     fn load(&mut self, name: &str) -> Option<Vec<u8>>;
     fn save(&mut self, name: &str, bytes: &[u8]);
+    /// The time, in seconds since 1970, for when books were last opened.
+    fn clock(&mut self) -> u64;
+}
+
+/// A book file where the platform keeps books.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BookFile {
+    pub name: String,
+    pub size: u64,
+    /// In seconds since 1970.
+    pub modified: u64,
+}
+
+/// Where the books are: a folder on the Kobo and in the emulator.
+pub trait Books<R>: Send + Sync {
+    fn list(&self) -> Vec<BookFile>;
+    /// The whole file, to index it.
+    fn read(&self, name: &str) -> io::Result<Vec<u8>>;
+    /// Opens a book to read, as often as needed: the reader and the
+    /// background pagination each open their own.
+    fn open(&self, name: &str) -> Result<BookReader<R>, FormatError>;
+}
+
+/// A book's key: 64-bit FNV-1a of the whole file, so a changed file is a
+/// new book, with its own saved place and page maps.
+pub fn book_key(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 /// Whether to keep running.
@@ -191,17 +223,13 @@ impl Preferences {
 }
 
 const PREFERENCES: &str = "preferences.json";
-
-fn position_file(book: u64) -> String {
-    format!("position-{book:016x}.json")
-}
-
-fn pages_file(key: u64) -> String {
-    format!("pages-{key:016x}.json")
-}
+/// Covers kept in memory, for redrawing the home screen without reading them
+/// again.
+const COVERS_KEPT: usize = 24;
 
 #[derive(Debug)]
 enum Mode {
+    Home(home::Layout),
     Reading,
     Menu(menu::Layout),
     /// On the sleep screen, waiting to suspend, or awake again after a
@@ -209,30 +237,23 @@ enum Mode {
     Asleep {
         /// When to try to suspend next.
         suspend_at: Instant,
+        /// The screen to go back to.
+        reading: bool,
     },
 }
 
-/// The rest of the book being paginated on another thread.
-struct Background {
-    receive: mpsc::Receiver<PageMap>,
-    stop: Arc<AtomicBool>,
-}
-
-impl Drop for Background {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-    }
-}
-
 pub struct Session<R> {
-    open: Opener<R>,
-    book_key: u64,
-    reader: Reader<R>,
+    books: Arc<dyn Books<R>>,
+    library: Library,
+    /// Kept while on the home screen, so going back to it is instant.
+    book: Option<book::OpenBook<R>>,
+    covers: HashMap<u64, Option<Picture>>,
     preferences: Preferences,
     light: Light,
-    /// For the menu and the sleep screen.
+    /// For the menu, the home screen and the sleep screen.
     ui: Typesetter,
-    /// The page with the menu or the sleep notice drawn over it.
+    /// Whatever isn't a plain page: the home screen, or the page with the
+    /// menu or the sleep notice drawn over it.
     screen: Canvas,
     mode: Mode,
     guard: TurnGuard,
@@ -240,18 +261,12 @@ pub struct Session<R> {
     ignored: u32,
     last_touch: Instant,
     woke: Option<Instant>,
-    background: Option<Background>,
-    /// Where the page started when the layout was first changed since the
-    /// last turn. Each change puts the line holding this at the top of the
-    /// page. That line can start a few words earlier, so starting from the
-    /// new page each time would creep back a line per step.
-    anchor: Option<Position>,
 }
 
 impl<R> std::fmt::Debug for Session<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Session")
-            .field("reader", &self.reader)
+            .field("book", &self.book)
             .field("mode", &self.mode)
             .field("turns", &self.turns)
             .finish_non_exhaustive()
@@ -259,10 +274,9 @@ impl<R> std::fmt::Debug for Session<R> {
 }
 
 impl<R: Read + Seek + Send + 'static> Session<R> {
-    /// Opens the book where it was left, and shows it.
+    /// Brings the library up to date and shows the home screen.
     pub fn start(
-        open: Opener<R>,
-        book_key: u64,
+        books: Arc<dyn Books<R>>,
         device: &mut dyn Device,
         now: Instant,
     ) -> Result<Self, AppError> {
@@ -274,17 +288,16 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             }
             None => device.light(),
         };
-        let at = load_json(device, &position_file(book_key)).unwrap_or(Position {
-            chapter: 0,
-            block: 0,
-            offset: 0,
-        });
+        let mut library = Library::load(device);
+        if library.refresh(books.as_ref(), device) {
+            library.save(device);
+        }
         let settings = preferences.settings();
-        let reader = open_reader(&open, book_key, &settings, at, false, device)?;
         let mut session = Self {
-            open,
-            book_key,
-            reader,
+            books,
+            library,
+            book: None,
+            covers: HashMap::new(),
             preferences,
             light,
             ui: Typesetter::new(Settings::default(), Some("en")),
@@ -295,15 +308,23 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             ignored: 0,
             last_touch: now,
             woke: None,
-            background: None,
-            anchor: None,
         };
-        session.show_page(device, Refresh::Full, now)?;
+        session.go_home(device, Refresh::Full, now);
         Ok(session)
     }
 
-    pub fn reader(&self) -> &Reader<R> {
-        &self.reader
+    pub fn library(&self) -> &Library {
+        &self.library
+    }
+
+    /// The open book's reader, if a book has been opened.
+    pub fn reader(&self) -> Option<&Reader<R>> {
+        self.book.as_ref().map(|book| &book.reader)
+    }
+
+    /// Whether the home screen is up.
+    pub fn at_home(&self) -> bool {
+        matches!(self.mode, Mode::Home(_))
     }
 
     /// Turns the guard has dropped so far.
@@ -314,10 +335,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     /// When to send [`Event::Tick`] if nothing else happens first.
     pub fn deadline(&self, now: Instant) -> Instant {
         let mut deadline = match self.mode {
-            Mode::Asleep { suspend_at } => suspend_at,
-            Mode::Reading | Mode::Menu(_) => self.last_touch + AUTO_SLEEP,
+            Mode::Asleep { suspend_at, .. } => suspend_at,
+            Mode::Home(_) | Mode::Reading | Mode::Menu(_) => self.last_touch + AUTO_SLEEP,
         };
-        if self.background.is_some() {
+        if self.book.as_ref().is_some_and(book::OpenBook::paginating) {
             deadline = deadline.min(now + BACKGROUND_CHECK);
         }
         deadline
@@ -332,6 +353,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         if !matches!(event, Event::Tick) {
             self.last_touch = now;
         }
+        let at_home = matches!(self.mode, Mode::Home(_));
         let in_menu = matches!(self.mode, Mode::Menu(_));
         let asleep = matches!(self.mode, Mode::Asleep { .. });
         match event {
@@ -350,12 +372,17 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                     self.sleep(device, now)?;
                 }
             }
+            Event::Tap { x, y } if at_home => return self.home_tap(x, y, now, device),
             Event::Tap { x, y } if in_menu => return self.menu_tap(x, y, now, device),
-            _ if in_menu => {}
+            _ if at_home || in_menu => {}
             Event::Tap { x, y } => self.reading_tap(x, y, now, device)?,
             Event::Turn(turn) => self.turn(turn, now, device)?,
             Event::Back => {
-                if self.guard.allow(now) && self.reader.back()? {
+                let went_back = match self.book.as_mut() {
+                    Some(book) => self.guard.allow(now) && book.reader.back()?,
+                    None => false,
+                };
+                if went_back {
                     self.moved(device, now)?;
                 }
             }
@@ -367,6 +394,34 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         &self.preferences
     }
 
+    /// Opens the book in `file`, from the library, where it was left.
+    pub fn open(
+        &mut self,
+        file: &str,
+        device: &mut dyn Device,
+        now: Instant,
+    ) -> Result<(), AppError> {
+        let Some(key) = self.library.get(file).map(|entry| entry.key) else {
+            return Ok(());
+        };
+        if self.book.as_ref().is_none_or(|book| book.file != file) {
+            self.leave_book(device);
+            let settings = self.preferences.settings();
+            self.book = Some(book::OpenBook::open(
+                &self.books,
+                file,
+                key,
+                &settings,
+                device,
+            )?);
+        }
+        let when = device.clock();
+        self.library.opened(file, when);
+        self.library.save(device);
+        self.mode = Mode::Reading;
+        self.show_page(device, Refresh::Full, now)
+    }
+
     /// Changes the preferences from outside the menu, such as from the
     /// emulator's keys, and shows the page again with them at the same place.
     pub fn update_preferences(
@@ -376,17 +431,91 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         change: impl FnOnce(&mut Preferences),
     ) -> Result<(), AppError> {
         change(&mut self.preferences);
-        self.reopen(device, now)?;
-        self.mode = Mode::Reading;
-        self.show_page(device, Refresh::Full, now)
+        self.relayout(device, now)?;
+        if self.book.is_some() && !self.at_home() {
+            self.mode = Mode::Reading;
+            self.show_page(device, Refresh::Full, now)?;
+        }
+        Ok(())
     }
 
-    /// Saves the place, for a platform that's about to stop on its own, such
-    /// as the emulator's window closing.
+    /// Saves the place and the library, for a platform that's about to stop
+    /// on its own, such as the emulator's window closing.
     pub fn save(&mut self, device: &mut dyn Device) {
-        if let Some(position) = self.reader.position() {
-            save_json(device, &position_file(self.book_key), &position);
+        if let Some(book) = &self.book {
+            book.save(device);
+            if let Some(progress) = book.progress() {
+                self.library.set_progress(&book.file, progress);
+            }
         }
+        self.library.save(device);
+    }
+
+    /// Saves the open book's place and closes it.
+    fn leave_book(&mut self, device: &mut dyn Device) {
+        self.save(device);
+        self.book = None;
+    }
+
+    fn home_tap(
+        &mut self,
+        x: f32,
+        y: f32,
+        now: Instant,
+        device: &mut dyn Device,
+    ) -> Result<Flow, AppError> {
+        let Mode::Home(layout) = &self.mode else {
+            return Ok(Flow::Continue);
+        };
+        match layout.hit(x, y) {
+            Some(home::Action::Open(file)) => self.open(&file, device, now)?,
+            Some(home::Action::Exit) => {
+                self.save(device);
+                return Ok(Flow::Exit);
+            }
+            None => {}
+        }
+        Ok(Flow::Continue)
+    }
+
+    /// Shows the home screen, saving the open book's place first.
+    fn go_home(&mut self, device: &mut dyn Device, refresh: Refresh, now: Instant) {
+        self.save(device);
+        let settings = Settings::default();
+        let layout = home::Layout::new(settings.width, settings.height, &self.library);
+        self.draw_home(&layout, device);
+        device.show(&self.screen, refresh);
+        self.guard.refreshing(now + refresh.duration());
+        self.mode = Mode::Home(layout);
+    }
+
+    /// Draws the home screen into `screen`.
+    fn draw_home(&mut self, layout: &home::Layout, device: &mut dyn Device) {
+        let battery = battery_text(device);
+        let Self {
+            library,
+            covers,
+            ui,
+            screen,
+            ..
+        } = self;
+        if covers.len() > COVERS_KEPT {
+            covers.clear();
+        }
+        let mut cover = |entry: &Entry| -> Option<Picture> {
+            if !entry.cover {
+                return None;
+            }
+            covers
+                .entry(entry.key)
+                .or_insert_with(|| {
+                    device
+                        .load(&library::cover_file(entry.key))
+                        .and_then(|bytes| Picture::from_bytes(&bytes))
+                })
+                .clone()
+        };
+        layout.draw(screen, ui, library, &mut cover, &battery);
     }
 
     fn reading_tap(
@@ -396,13 +525,16 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         now: Instant,
         device: &mut dyn Device,
     ) -> Result<(), AppError> {
+        let Some(book) = self.book.as_mut() else {
+            return Ok(());
+        };
         let (width, height) = (
-            self.reader.settings().width as f32,
-            self.reader.settings().height as f32,
+            book.reader.settings().width as f32,
+            book.reader.settings().height as f32,
         );
-        if let Some(target) = self.reader.link_at(x, y) {
+        if let Some(target) = book.reader.link_at(x, y) {
             if self.guard.allow(now) {
-                self.reader.follow(target)?;
+                book.reader.follow(target)?;
                 self.moved(device, now)?;
                 self.save(device);
             } else {
@@ -419,11 +551,14 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     }
 
     fn turn(&mut self, turn: Turn, now: Instant, device: &mut dyn Device) -> Result<(), AppError> {
+        let Some(book) = self.book.as_mut() else {
+            return Ok(());
+        };
         if !self.guard.allow(now) {
             self.ignored += 1;
             return Ok(());
         }
-        if self.reader.turn(turn)? {
+        if book.reader.turn(turn)? {
             self.moved(device, now)?;
             if self.turns.is_multiple_of(SAVE_EVERY) {
                 self.save(device);
@@ -434,7 +569,9 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
 
     /// Shows the page after a turn or a jump.
     fn moved(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
-        self.anchor = None;
+        if let Some(book) = self.book.as_mut() {
+            book.moved();
+        }
         self.turns += 1;
         let refresh = if self.turns.is_multiple_of(FULL_EVERY) {
             Refresh::Full
@@ -452,68 +589,42 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         refresh: Refresh,
         now: Instant,
     ) -> Result<(), AppError> {
-        if let Some(page) = self.reader.page()? {
+        let Some(book) = self.book.as_mut() else {
+            return Ok(());
+        };
+        if let Some(page) = book.reader.page()? {
             device.show(page, refresh);
         } else {
             self.screen.clear();
             device.show(&self.screen, refresh);
         }
         self.guard.refreshing(now + refresh.duration());
-        self.reader.prepare()?;
-        self.paginate_in_background();
+        book.reader.prepare()?;
+        book.paginate_in_background();
         Ok(())
     }
 
-    /// Starts laying out the rest of the book on another thread, if it isn't
-    /// all laid out and that isn't already under way. Only once the screen
-    /// is drawn: the Clara BW has one core, and the thread would take half
-    /// of it from drawing the page.
-    fn paginate_in_background(&mut self) {
-        if self.background.is_some() || self.reader.page_map().is_complete() {
-            return;
-        }
-        let (send, receive) = mpsc::channel();
-        let stop = Arc::new(AtomicBool::new(false));
-        let mut map = self.reader.page_map().clone();
-        let open = Arc::clone(&self.open);
-        let thread_stop = Arc::clone(&stop);
-        let settings = self.reader.settings().clone();
-        std::thread::spawn(move || {
-            let Ok(mut book) = open() else {
-                return;
-            };
-            let result = paginate_book(&mut book, settings, &mut map, || {
-                thread_stop.load(Ordering::Relaxed)
-            });
-            if result.is_ok() && map.is_complete() {
-                let _ = send.send(map);
-            }
-        });
-        self.background = Some(Background { receive, stop });
-    }
-
     fn tick(&mut self, now: Instant, device: &mut dyn Device) -> Result<(), AppError> {
-        if let Some(background) = &self.background
-            && let Ok(map) = background.receive.try_recv()
-        {
-            self.reader.adopt(&map);
-            let key = PageMap::key(self.book_key, self.reader.settings());
-            save_json(device, &pages_file(key), &map);
-            self.background = None;
+        if let Some(book) = self.book.as_mut() {
+            book.collect(device);
         }
         match self.mode {
-            Mode::Asleep { suspend_at } => {
+            Mode::Asleep {
+                suspend_at,
+                reading,
+            } => {
                 if now >= suspend_at {
                     if !device.battery().is_some_and(|b| b.charging) && device.suspend() {
                         self.wake(device, Instant::now().max(now))?;
                     } else {
                         self.mode = Mode::Asleep {
                             suspend_at: now + SLEEP_RETRY,
+                            reading,
                         };
                     }
                 }
             }
-            Mode::Reading | Mode::Menu(_) => {
+            Mode::Home(_) | Mode::Reading | Mode::Menu(_) => {
                 let idle = now.duration_since(self.last_touch) >= AUTO_SLEEP;
                 if idle && !device.battery().is_some_and(|b| b.charging) {
                     self.sleep(device, now)?;
@@ -525,8 +636,12 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
 
     fn sleep(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
         self.save(device);
-        self.compose_page()?;
-        let (width, height) = (self.reader.settings().width, self.reader.settings().height);
+        let reading = !matches!(self.mode, Mode::Home(_));
+        if reading {
+            self.compose_page()?;
+        }
+        // At home, `screen` still holds the home screen.
+        let (width, height) = (self.screen.width(), self.screen.height());
         let band = 160;
         let top = height - band;
         self.screen.fill(0, top as i32, width, band, 255);
@@ -547,20 +662,31 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         device.show(&self.screen, Refresh::Full);
         self.mode = Mode::Asleep {
             suspend_at: now + SUSPEND_DELAY,
+            reading,
         };
         Ok(())
     }
 
     fn wake(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
-        self.mode = Mode::Reading;
+        let reading = matches!(self.mode, Mode::Asleep { reading: true, .. });
         self.woke = Some(now);
         self.last_touch = now;
-        self.show_page(device, Refresh::Full, now)
+        if reading && self.book.is_some() {
+            self.mode = Mode::Reading;
+            self.show_page(device, Refresh::Full, now)
+        } else {
+            self.go_home(device, Refresh::Full, now);
+            Ok(())
+        }
     }
 
     /// Copies the current page into `screen`, to draw over.
     fn compose_page(&mut self) -> Result<(), AppError> {
-        match self.reader.page()? {
+        let page = match self.book.as_mut() {
+            Some(book) => book.reader.page()?,
+            None => None,
+        };
+        match page {
             Some(page) => self.screen.clone_from(page),
             None => self.screen.clear(),
         }
@@ -568,7 +694,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     }
 
     fn open_menu(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
-        let layout = menu::Layout::new(self.reader.settings().width, self.reader.can_go_back());
+        let Some(book) = &self.book else {
+            return Ok(());
+        };
+        let layout = menu::Layout::new(book.reader.settings().width, book.reader.can_go_back());
         self.mode = Mode::Menu(layout);
         self.draw_menu(device, now)
     }
@@ -581,28 +710,26 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         }
         device.show(&self.screen, Refresh::Partial);
         self.guard.refreshing(now + Refresh::Partial.duration());
-        self.paginate_in_background();
+        if let Some(book) = self.book.as_mut() {
+            book.paginate_in_background();
+        }
         Ok(())
     }
 
     fn menu_values(&self, device: &mut dyn Device) -> menu::Values {
         let p = &self.preferences;
+        let reader = self.book.as_ref().map(|book| &book.reader);
         menu::Values {
-            title: self.reader.manifest().title.clone(),
-            battery: match device.battery() {
-                Some(Battery {
-                    percent,
-                    charging: true,
-                }) => format!("{percent}%, charging"),
-                Some(Battery { percent, .. }) => format!("{percent}%"),
-                None => String::new(),
-            },
+            title: reader
+                .map(|r| r.manifest().title.clone())
+                .unwrap_or_default(),
+            battery: battery_text(device),
             light: format!("{}%", self.light.brightness),
             warmth: self.light.warmth.to_string(),
             text_size: format!("{}", p.font_size),
             darkness: format!("{}", p.weight),
             contrast: format!("{:.1}", p.gamma),
-            can_return: self.reader.can_go_back(),
+            can_return: reader.is_some_and(Reader::can_go_back),
         }
     }
 
@@ -622,12 +749,15 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             None if below => self.close_menu(device, now)?,
             None => {}
             Some(menu::Action::Close) => self.close_menu(device, now)?,
+            Some(menu::Action::Home) => self.go_home(device, Refresh::Full, now),
             Some(menu::Action::Exit) => {
                 self.save(device);
                 return Ok(Flow::Exit);
             }
             Some(menu::Action::Return) => {
-                self.reader.back()?;
+                if let Some(book) = self.book.as_mut() {
+                    book.reader.back()?;
+                }
                 self.close_menu(device, now)?;
             }
             Some(menu::Action::Light(step)) => {
@@ -641,18 +771,18 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Some(menu::Action::TextSize(step)) => {
                 let p = &mut self.preferences;
                 p.font_size = (p.font_size + signed(step, 4.0)).clamp(24.0, 80.0);
-                self.reopen(device, now)?;
+                self.relayout(device, now)?;
             }
             Some(menu::Action::Darkness(step)) => {
                 let p = &mut self.preferences;
                 p.weight = (p.weight + signed(step, 50.0)).clamp(300.0, 700.0);
-                self.reopen(device, now)?;
+                self.relayout(device, now)?;
             }
             Some(menu::Action::Contrast(step)) => {
                 let p = &mut self.preferences;
                 // Kept to tenths, so repeated steps don't drift.
                 p.gamma = ((p.gamma + signed(step, 0.2)).clamp(0.6, 3.0) * 10.0).round() / 10.0;
-                self.reopen(device, now)?;
+                self.relayout(device, now)?;
             }
         }
         Ok(Flow::Continue)
@@ -670,21 +800,14 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         self.draw_menu(device, now)
     }
 
-    /// Opens the book again with changed preferences, at the same place.
-    fn reopen(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
+    /// Saves the changed preferences, and lays the open book out again with
+    /// them at the same place.
+    fn relayout(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
         save_json(device, PREFERENCES, &self.preferences);
-        let at = self
-            .anchor
-            .or_else(|| self.reader.position())
-            .unwrap_or(Position {
-                chapter: 0,
-                block: 0,
-                offset: 0,
-            });
-        self.anchor = Some(at);
-        self.background = None;
         let settings = self.preferences.settings();
-        self.reader = open_reader(&self.open, self.book_key, &settings, at, true, device)?;
+        if let Some(book) = self.book.as_mut() {
+            book.relayout(&settings, device)?;
+        }
         if matches!(self.mode, Mode::Menu(_)) {
             self.draw_menu(device, now)?;
         }
@@ -692,30 +815,16 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     }
 }
 
-/// Opens the reader with its saved page map. With `relayout`,
-/// the settings have just changed, and the line at `at` stays at the top of
-/// its page; see [`Reader::relayout`].
-fn open_reader<R: Read + Seek + Send + 'static>(
-    open: &Opener<R>,
-    book_key: u64,
-    settings: &Settings,
-    at: Position,
-    relayout: bool,
-    device: &mut dyn Device,
-) -> Result<Reader<R>, AppError> {
-    let key = PageMap::key(book_key, settings);
-    let cached: Option<PageMap> = load_json(device, &pages_file(key));
-    let reader = if relayout {
-        Reader::relayout(open()?, settings.clone(), book_key, at, cached)?
-    } else {
-        Reader::open(open()?, settings.clone(), book_key, at, cached)?
-    };
-    if relayout && reader.page_map().is_complete() {
-        // There's no background pagination to save it, and the page at `at`
-        // has moved from where a saved map has it.
-        save_json(device, &pages_file(key), reader.page_map());
+/// "84%", "84%, charging", or nothing if the device doesn't say.
+fn battery_text(device: &mut dyn Device) -> String {
+    match device.battery() {
+        Some(Battery {
+            percent,
+            charging: true,
+        }) => format!("{percent}%, charging"),
+        Some(Battery { percent, .. }) => format!("{percent}%"),
+        None => String::new(),
     }
-    Ok(reader)
 }
 
 fn stepped(value: u8, step: menu::Step, by: u8, max: u8) -> u8 {
