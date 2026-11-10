@@ -12,7 +12,8 @@
 //!   page. Click elsewhere, or press →, Page Down or Space, to go forward.
 //! - Click a link to follow it, and press Backspace to return.
 //! - `+` and `-` change the text size, `H` toggles hyphenation, `J`
-//!   justification and `K` Knuth–Plass line breaking.
+//!   justification and `K` Knuth–Plass line breaking. `[` and `]` change the
+//!   text weight, and `,` and `.` its gamma, to try darker text for e-ink.
 //! - `Q` or Esc quits.
 //!
 //! A turn shows the new page only after the panel's refresh time from
@@ -118,8 +119,13 @@ fn main() {
             cache.save(&app.reader);
             app = App::open(&bytes, book_key, &cache, settings.clone(), Some(at));
             println!(
-                "text {} px, hyphenation {}, justified {}, Knuth–Plass {}",
-                settings.font_size, settings.hyphenate, settings.justify, settings.optimal_breaks
+                "text {} px, weight {}, gamma {}, hyphenation {}, justified {}, Knuth–Plass {}",
+                settings.font_size,
+                settings.weight,
+                settings.gamma,
+                settings.hyphenate,
+                settings.justify,
+                settings.optimal_breaks
             );
         } else if let Some(action) = action {
             app.act(action, now);
@@ -160,6 +166,17 @@ fn keys(window: &Window, settings: &mut Settings) -> (Option<Action>, Option<f32
             }
             Key::K => {
                 settings.optimal_breaks = !settings.optimal_breaks;
+                changed = Some(settings.font_size);
+            }
+            Key::LeftBracket | Key::RightBracket => {
+                let step = if key == Key::LeftBracket { -50.0 } else { 50.0 };
+                settings.weight = (settings.weight + step).clamp(300.0, 700.0);
+                changed = Some(settings.font_size);
+            }
+            Key::Comma | Key::Period => {
+                let step = if key == Key::Comma { -0.2 } else { 0.2 };
+                // Rounded, so repeated steps land on tenths.
+                settings.gamma = ((settings.gamma + step).clamp(0.6, 3.0) * 10.0).round() / 10.0;
                 changed = Some(settings.font_size);
             }
             _ => {}

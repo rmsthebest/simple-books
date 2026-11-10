@@ -36,8 +36,12 @@ pub use typeset::Typesetter;
 /// page maps cached on disk are made again.
 pub const LAYOUT_VERSION: u32 = 4;
 
+/// Literata's weight axis.
+const MIN_WEIGHT: f32 = 200.0;
+const MAX_WEIGHT: f32 = 900.0;
+
 /// How pages look. Everything that changes where lines break is in here, and
-/// [`Settings::cache_key`] covers all of it.
+/// [`Settings::cache_key`] covers all of that; `gamma` only changes drawing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     /// The page in pixels, as drawn: upright portrait on the Kobo.
@@ -59,6 +63,13 @@ pub struct Settings {
     /// Choose a justified paragraph's line breaks together, with Knuth and
     /// Plass's method, rather than filling each line in turn.
     pub optimal_breaks: bool,
+    /// The body text's weight, 400 being regular. Literata is variable, so
+    /// text can be made darker for e-ink by thickening its strokes. Headings
+    /// and bold text keep the same steps above it.
+    pub weight: f32,
+    /// Applied to glyphs' coverage: above 1, the grey edges of letters are
+    /// drawn darker, so text looks heavier without changing its shapes.
+    pub gamma: f32,
 }
 
 impl Default for Settings {
@@ -76,6 +87,8 @@ impl Default for Settings {
             justify: true,
             hyphenate: true,
             optimal_breaks: true,
+            weight: 400.0,
+            gamma: 1.0,
         }
     }
 }
@@ -95,7 +108,7 @@ impl Settings {
         ] {
             hash.write(&value.to_le_bytes());
         }
-        for value in [self.dpi, self.font_size, self.line_height] {
+        for value in [self.dpi, self.font_size, self.line_height, self.weight] {
             hash.write(&value.to_bits().to_le_bytes());
         }
         hash.write(&[
@@ -113,6 +126,11 @@ impl Settings {
     pub(crate) fn content_height(&self) -> f32 {
         self.height
             .saturating_sub(self.margin_top + self.margin_bottom) as f32
+    }
+
+    /// A weight `steps` above the body text's, within the fonts' range.
+    pub(crate) fn weight_above(&self, steps: f32) -> f32 {
+        (self.weight + steps).clamp(MIN_WEIGHT, MAX_WEIGHT)
     }
 
     /// The height of one line of body text.
@@ -136,5 +154,35 @@ impl Fnv {
             self.0 ^= u64::from(*byte);
             self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weight_changes_the_layout_and_gamma_does_not() {
+        let plain = Settings::default();
+        let heavier = Settings {
+            weight: 450.0,
+            ..plain.clone()
+        };
+        let darker = Settings {
+            gamma: 1.5,
+            ..plain.clone()
+        };
+        assert_ne!(plain.cache_key(), heavier.cache_key());
+        assert_eq!(plain.cache_key(), darker.cache_key());
+    }
+
+    #[test]
+    fn weights_stay_in_the_fonts_range() {
+        let heavy = Settings {
+            weight: 800.0,
+            ..Settings::default()
+        };
+        assert_eq!(heavy.weight_above(300.0), 900.0);
+        assert_eq!(Settings::default().weight_above(200.0), 600.0);
     }
 }

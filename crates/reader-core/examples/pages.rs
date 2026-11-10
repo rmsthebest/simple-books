@@ -2,11 +2,13 @@
 //! and get a per-page budget to check on the device.
 //!
 //! ```sh
-//! cargo run --release -p reader-core --example pages -- book.epub [out-dir] [pages] [--greedy]
+//! cargo run --release -p reader-core --example pages -- book.epub [out-dir] [pages] \
+//!     [--greedy] [--weight=400] [--gamma=1.0]
 //! ```
 //!
 //! `--greedy` fills each line in turn instead of choosing breaks with
-//! Knuth–Plass, to compare the two.
+//! Knuth–Plass, to compare the two. `--weight` and `--gamma` set
+//! [`Settings::weight`] and [`Settings::gamma`].
 //!
 //! Takes an EPUB (converted here, as the server would) or a converted book.
 #![allow(clippy::cast_precision_loss, reason = "timings")]
@@ -24,7 +26,15 @@ use reader_core::{PageMap, Reader, Settings, Turn, paginate_book};
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let greedy = args.iter().any(|a| a == "--greedy");
-    args.retain(|a| a != "--greedy");
+    let flag = |name: &str| {
+        args.iter()
+            .find_map(|a| a.strip_prefix(name)?.strip_prefix('='))
+            .map(|v| v.parse::<f32>().expect("a number"))
+    };
+    let defaults = Settings::default();
+    let weight = flag("--weight").unwrap_or(defaults.weight);
+    let gamma = flag("--gamma").unwrap_or(defaults.gamma);
+    args.retain(|a| !a.starts_with("--"));
     let input = PathBuf::from(&args[0]);
     let out = args.get(1).map(PathBuf::from);
     let wanted: usize = args.get(2).and_then(|n| n.parse().ok()).unwrap_or(12);
@@ -44,7 +54,9 @@ fn main() {
     let open = || BookReader::open(Cursor::new(bytes.clone()), Limits::default()).unwrap();
     let settings = Settings {
         optimal_breaks: !greedy,
-        ..Settings::default()
+        weight,
+        gamma,
+        ..defaults
     };
 
     // The whole book, as the background thread would do it.

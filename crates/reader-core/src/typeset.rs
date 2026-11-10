@@ -188,6 +188,7 @@ impl Typesetter {
         let code_space = fonts::advance_em(&mut fonts, fonts::MONO_FAMILY, ' ').unwrap_or(0.6);
         let code_space_spacing = code_space
             - fonts::advance_em(&mut fonts, fonts::BODY_FAMILY, CODE_SPACE).unwrap_or(code_space);
+        let glyphs = Glyphs::new(settings.gamma);
         Self {
             settings,
             fonts,
@@ -203,7 +204,7 @@ impl Typesetter {
             code_space,
             code_space_spacing,
             code_spaces: Vec::new(),
-            glyphs: Glyphs::default(),
+            glyphs,
         }
     }
 
@@ -441,7 +442,7 @@ impl Typesetter {
                     3 => 1.15,
                     _ => 1.0,
                 };
-                style.weight = Some(600.0);
+                style.weight = Some(self.settings.weight_above(200.0));
                 style.space_before = line * 1.5;
                 style.space_after = line * 0.5;
                 style.keep_with_next = true;
@@ -506,9 +507,8 @@ impl Typesetter {
         // A run with nowhere to break, such as a long URL, is broken at the
         // margin rather than drawn past it.
         builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
-        if let Some(weight) = style.weight {
-            builder.push_default(StyleProperty::FontWeight(FontWeight::new(weight)));
-        }
+        let weight = style.weight.unwrap_or(self.settings.weight_above(0.0));
+        builder.push_default(StyleProperty::FontWeight(FontWeight::new(weight)));
         for (span, range) in block.spans.iter().zip(ranges) {
             if range.is_empty() {
                 continue;
@@ -518,7 +518,10 @@ impl Typesetter {
                 builder.push(StyleProperty::FontStyle(FontStyle::Italic), range.clone());
             }
             if st.strong {
-                builder.push(StyleProperty::FontWeight(FontWeight::BOLD), range.clone());
+                builder.push(
+                    StyleProperty::FontWeight(FontWeight::new(self.settings.weight_above(300.0))),
+                    range.clone(),
+                );
             }
             if st.code && !style.preformatted {
                 builder.push(StyleProperty::FontFamily(mono()), range.clone());
@@ -712,6 +715,9 @@ impl Typesetter {
         builder.push_default(StyleProperty::FontSize(size));
         builder.push_default(StyleProperty::Locale(self.locale));
         builder.push_default(optical_size(size, self.settings.dpi));
+        builder.push_default(StyleProperty::FontWeight(FontWeight::new(
+            self.settings.weight_above(0.0),
+        )));
         builder.build_into(&mut self.aux, text);
         self.aux.break_all_lines(None);
     }
@@ -1109,5 +1115,33 @@ mod tests {
         let margin = (settings.width - settings.margin_side) as f32;
         assert!((links[0].right - margin).abs() < 1.0, "{links:?}");
         assert!(links[1].right < margin - 40.0, "{links:?}");
+    }
+
+    #[test]
+    fn heavier_text_has_more_ink() {
+        let ink = |weight| {
+            let settings = Settings {
+                weight,
+                ..Settings::default()
+            };
+            let mut typesetter = Typesetter::new(settings.clone(), Some("en"));
+            let chapter = hyphenated_chapter();
+            let at = ChapterRef {
+                index: 0,
+                chapter: &chapter,
+                images: &[],
+            };
+            let placed = typesetter.block(at, 0);
+            let mut page = Page::new(settings.width, settings.height);
+            typesetter.draw_lines(&mut page, at, 0, 0..4, 100.0, &mut |_| None);
+            assert!(placed.lines.len() > 4);
+            page.canvas
+                .pixels()
+                .iter()
+                .map(|p| u64::from(255 - p))
+                .sum::<u64>()
+        };
+        let (regular, heavier) = (ink(400.0), ink(500.0));
+        assert!(heavier > regular * 11 / 10, "{regular} → {heavier}");
     }
 }

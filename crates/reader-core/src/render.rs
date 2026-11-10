@@ -40,8 +40,9 @@ struct Bitmap {
     alpha: Vec<u8>,
 }
 
-#[derive(Default)]
 pub(crate) struct Glyphs {
+    /// Coverage to ink, from [`crate::Settings::gamma`].
+    curve: [u8; 256],
     masks: HashMap<Key, Bitmap>,
     chars: HashMap<(u64, u32, char), Option<u32>>,
     scratch: Scratch,
@@ -55,6 +56,26 @@ impl std::fmt::Debug for Glyphs {
 }
 
 impl Glyphs {
+    pub(crate) fn new(gamma: f32) -> Self {
+        let gamma = if gamma.is_finite() && gamma > 0.0 {
+            gamma
+        } else {
+            1.0
+        };
+        let mut curve = [0u8; 256];
+        for (i, out) in curve.iter_mut().enumerate() {
+            let coverage = i as f32 / 255.0;
+            *out = (coverage.powf(1.0 / gamma) * 255.0).round() as u8;
+        }
+        Self {
+            curve,
+            masks: HashMap::new(),
+            chars: HashMap::new(),
+            scratch: Scratch::new(),
+            path: Vec::new(),
+        }
+    }
+
     /// Draws a glyph with its origin at (`x`, `y`) on the page. `coords` are
     /// the font's normalized variation coordinates, as raw `F2Dot14` bits.
     /// Returns whether the glyph has any ink: false for a space.
@@ -158,9 +179,12 @@ impl Glyphs {
         if outline.draw(settings, &mut Pen(&mut self.path)).is_err() || self.path.is_empty() {
             return empty;
         }
-        let (alpha, placement) = Mask::with_scratch(&self.path[..], &mut self.scratch)
+        let (mut alpha, placement) = Mask::with_scratch(&self.path[..], &mut self.scratch)
             .offset(Vector::new(offset, 0.0))
             .render();
+        for a in &mut alpha {
+            *a = self.curve[usize::from(*a)];
+        }
         Bitmap {
             left: placement.left,
             top: placement.top,
@@ -227,5 +251,22 @@ pub(crate) fn image(
         let scaled =
             image::imageops::resize(gray, width, height, image::imageops::FilterType::Triangle);
         canvas.copy(left, top, width, height, scaled.as_raw());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gamma_darkens_edges_but_not_solid_ink_or_paper() {
+        let plain = Glyphs::new(1.0);
+        let dark = Glyphs::new(1.8);
+        assert!((0..=255).all(|i| plain.curve[i] as usize == i));
+        assert_eq!((dark.curve[0], dark.curve[255]), (0, 255));
+        assert!(dark.curve[64] > 100, "{}", dark.curve[64]);
+        assert!(dark.curve.windows(2).all(|w| w[0] <= w[1]));
+        // Nonsense falls back to no change.
+        assert_eq!(Glyphs::new(f32::NAN).curve, plain.curve);
     }
 }
