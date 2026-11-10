@@ -231,6 +231,8 @@ fn first_box_after(items: &[Item], index: usize) -> usize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Space,
+    /// A space that doesn't stretch, as inside inline code.
+    FixedSpace,
     SoftHyphen,
     Newline,
     /// A hyphen or dash, after which a word may break.
@@ -285,6 +287,7 @@ pub(crate) fn break_layout(
                 };
                 let kind = match first {
                     ' ' => Kind::Space,
+                    crate::typeset::CODE_SPACE => Kind::FixedSpace,
                     SOFT_HYPHEN => Kind::SoftHyphen,
                     '\n' => Kind::Newline,
                     '-' | '\u{2010}' | '\u{2013}' | '\u{2014}' => Kind::Dash,
@@ -385,6 +388,13 @@ fn items(clusters: &[Cluster], hyphen: f32) -> (Vec<Item>, Vec<usize>) {
                 Item::Glue {
                     width: cluster.advance,
                     stretch: cluster.advance,
+                },
+                index + 1,
+            )),
+            Kind::FixedSpace => out.push((
+                Item::Glue {
+                    width: cluster.advance,
+                    stretch: 0.0,
                 },
                 index + 1,
             )),

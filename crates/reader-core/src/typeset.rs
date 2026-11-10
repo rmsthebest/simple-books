@@ -15,9 +15,14 @@ use parley::{
     PositionedLayoutItem, StyleProperty, VerticalAlign, WhiteSpaceCollapse, YieldData,
     fontique::Language,
 };
-use skrifa::{FontRef, MetadataProvider, instance::Size};
 
 use crate::{Canvas, Settings, fonts, knuth_plass, render::Glyphs};
+
+/// Stands in for a space inside inline code. Parley justifies by widening
+/// ordinary spaces, and leaves fixed-width ones like this alone; a line may
+/// still break after it. Intel One Mono has no glyph for it, so Literata's is
+/// used, widened with letter spacing to a monospace space.
+pub(crate) const CODE_SPACE: char = '\u{2008}';
 
 /// A typographic point in inches.
 const POINT: f32 = 1.0 / 72.0;
@@ -91,6 +96,12 @@ pub struct Typesetter {
     /// Whether the block in `layout` was broken with Knuth–Plass.
     optimal: bool,
     hyphen_em: f32,
+    /// A monospace space, per pixel of font size.
+    code_space: f32,
+    /// What [`CODE_SPACE`] is short of a monospace space, per pixel.
+    code_space_spacing: f32,
+    /// Where the current block's code spaces are, to widen them.
+    code_spaces: Vec<std::ops::Range<usize>>,
     glyphs: Glyphs,
 }
 
@@ -107,7 +118,10 @@ impl Typesetter {
     /// line-breaking rules.
     pub fn new(settings: Settings, language: Option<&str>) -> Self {
         let mut fonts = fonts::context();
-        let hyphen_em = hyphen_em(&mut fonts);
+        let hyphen_em = fonts::advance_em(&mut fonts, fonts::BODY_FAMILY, '-').unwrap_or(0.33);
+        let code_space = fonts::advance_em(&mut fonts, fonts::MONO_FAMILY, ' ').unwrap_or(0.6);
+        let code_space_spacing = code_space
+            - fonts::advance_em(&mut fonts, fonts::BODY_FAMILY, CODE_SPACE).unwrap_or(code_space);
         Self {
             settings,
             fonts,
@@ -120,6 +134,9 @@ impl Typesetter {
             current: None,
             optimal: false,
             hyphen_em,
+            code_space,
+            code_space_spacing,
+            code_spaces: Vec::new(),
             glyphs: Glyphs::default(),
         }
     }
@@ -296,7 +313,7 @@ impl Typesetter {
             BlockKind::ListItem { .. } => style.inset += step,
             BlockKind::Preformatted => {
                 style.preformatted = true;
-                style.scale = 0.9;
+                style.scale = fonts::MONO_SCALE;
                 style.space_before = line * 0.5;
                 style.space_after = line * 0.5;
             }
@@ -328,33 +345,17 @@ impl Typesetter {
     }
 
     fn lay_out(&mut self, block: &Block, style: &BlockStyle) {
+        let size = self.settings.font_size * style.scale;
+        let (ranges, has_hyphens) = self.gather_text(block, style);
         let s = &self.settings;
-        let size = s.font_size * style.scale;
-        let keep_hyphens = s.hyphenate;
-
-        self.text.clear();
-        let mut ranges = Vec::with_capacity(block.spans.len());
-        if let BlockKind::Separator = block.kind {
-            self.text.push_str("*\u{2003}*\u{2003}*");
-        }
-        for span in &block.spans {
-            let start = self.text.len();
-            if keep_hyphens {
-                self.text.push_str(&span.text);
-            } else {
-                self.text
-                    .extend(span.text.chars().filter(|c| *c != SOFT_HYPHEN));
-            }
-            ranges.push(start..self.text.len());
-        }
-        let has_hyphens = keep_hyphens && self.text.contains(SOFT_HYPHEN);
-
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.fonts, &self.text, 1.0, true);
-        builder.push_default(StyleProperty::FontFamily(FontFamily::named(
-            fonts::BODY_FAMILY,
-        )));
+        builder.push_default(StyleProperty::FontFamily(if style.preformatted {
+            mono()
+        } else {
+            FontFamily::named(fonts::BODY_FAMILY)
+        }));
         builder.push_default(StyleProperty::FontSize(size));
         builder.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(
             s.line_height,
@@ -366,8 +367,8 @@ impl Typesetter {
         } else {
             WhiteSpaceCollapse::PreserveBreaks
         }));
-        // A run with nowhere to break, such as code spaced with no-break
-        // spaces, is broken at the margin rather than drawn past it.
+        // A run with nowhere to break, such as a long URL, is broken at the
+        // margin rather than drawn past it.
         builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
         if let Some(weight) = style.weight {
             builder.push_default(StyleProperty::FontWeight(FontWeight::new(weight)));
@@ -382,6 +383,13 @@ impl Typesetter {
             }
             if st.strong {
                 builder.push(StyleProperty::FontWeight(FontWeight::BOLD), range.clone());
+            }
+            if st.code && !style.preformatted {
+                builder.push(StyleProperty::FontFamily(mono()), range.clone());
+                builder.push(
+                    StyleProperty::FontSize(size * fonts::MONO_SCALE),
+                    range.clone(),
+                );
             }
             if st.small_caps {
                 builder.push(
@@ -400,13 +408,75 @@ impl Typesetter {
                 builder.push(optical_size(size * 0.7, s.dpi), range);
             }
         }
+        let code_size = size * fonts::MONO_SCALE;
+        for range in &self.code_spaces {
+            builder.push(
+                StyleProperty::LetterSpacing(self.code_space_spacing * code_size),
+                range.clone(),
+            );
+        }
         builder.build_into(&mut self.layout, &self.text);
-        self.layout
-            .set_text_indent(style.first_line_indent, IndentOptions::default());
+        if style.preformatted {
+            // A code line too long for the page carries on indented, as in an
+            // editor, so it isn't mistaken for the next line.
+            self.layout.set_text_indent(
+                2.0 * self.code_space * size,
+                IndentOptions {
+                    each_line: true,
+                    hanging: true,
+                },
+            );
+        } else {
+            self.layout
+                .set_text_indent(style.first_line_indent, IndentOptions::default());
+        }
 
-        let width = (s.content_width() - style.inset).max(size);
+        self.break_block(style, size, has_hyphens);
+        self.layout
+            .align(style.alignment, AlignmentOptions::default());
+    }
+
+    /// Gathers the block's text, without soft hyphens when hyphenation is
+    /// off. Returns each span's range in it, and whether it has soft hyphens.
+    fn gather_text(
+        &mut self,
+        block: &Block,
+        style: &BlockStyle,
+    ) -> (Vec<std::ops::Range<usize>>, bool) {
+        let keep_hyphens = self.settings.hyphenate;
+        self.text.clear();
+        let mut ranges = Vec::with_capacity(block.spans.len());
+        if let BlockKind::Separator = block.kind {
+            self.text.push_str("*\u{2003}*\u{2003}*");
+        }
+        self.code_spaces.clear();
+        for span in &block.spans {
+            let start = self.text.len();
+            let inline_code = span.style.code && !style.preformatted;
+            for c in span.text.chars() {
+                if c == SOFT_HYPHEN && !keep_hyphens {
+                    continue;
+                }
+                if c == ' ' && inline_code {
+                    // Justifying shouldn't spread code out.
+                    let at = self.text.len();
+                    self.text.push(CODE_SPACE);
+                    self.code_spaces.push(at..self.text.len());
+                } else {
+                    self.text.push(c);
+                }
+            }
+            ranges.push(start..self.text.len());
+        }
+        let has_hyphens = keep_hyphens && self.text.contains(SOFT_HYPHEN);
+        (ranges, has_hyphens)
+    }
+
+    /// Breaks the built layout into lines, optimally if it can.
+    fn break_block(&mut self, style: &BlockStyle, size: f32, has_hyphens: bool) {
+        let width = (self.settings.content_width() - style.inset).max(size);
         let hyphen = self.hyphen_em * size;
-        let optimal = s.optimal_breaks
+        let optimal = self.settings.optimal_breaks
             && style.alignment == Alignment::Justify
             && !style.preformatted
             && knuth_plass::break_layout(
@@ -428,8 +498,6 @@ impl Typesetter {
         } else {
             self.break_lines(width, size, has_hyphens);
         }
-        self.layout
-            .align(style.alignment, AlignmentOptions::default());
     }
 
     /// Breaks the block into lines `width` wide one line at a time, leaving
@@ -541,6 +609,14 @@ impl Typesetter {
     }
 }
 
+/// Intel One Mono, falling back to Literata for anything it lacks.
+fn mono() -> FontFamily<'static> {
+    FontFamily::List(Cow::Borrowed(&[
+        parley::FontFamilyName::Named(Cow::Borrowed(fonts::MONO_FAMILY)),
+        parley::FontFamilyName::Named(Cow::Borrowed(fonts::BODY_FAMILY)),
+    ]))
+}
+
 /// Literata's optical size axis is in points, so small text gets sturdier
 /// shapes and headings finer ones, as in print.
 fn optical_size(px: f32, dpi: f32) -> StyleProperty<'static, ()> {
@@ -548,27 +624,6 @@ fn optical_size(px: f32, dpi: f32) -> StyleProperty<'static, ()> {
     StyleProperty::FontVariations(FontVariations::Source(Cow::Owned(format!(
         "\"opsz\" {points:.1}"
     ))))
-}
-
-/// The hyphen's advance in the regular font, per pixel of font size.
-fn hyphen_em(fonts: &mut FontContext) -> f32 {
-    let Some(family) = fonts.collection.family_by_name(fonts::BODY_FAMILY) else {
-        return 0.33;
-    };
-    let Some(font) = family.fonts().first() else {
-        return 0.33;
-    };
-    let Some(blob) = font.load(Some(&mut fonts.source_cache)) else {
-        return 0.33;
-    };
-    FontRef::from_index(blob.as_ref(), font.index())
-        .ok()
-        .and_then(|font| {
-            let id = font.charmap().map('-')?;
-            font.glyph_metrics(Size::new(1.0), skrifa::instance::LocationRef::default())
-                .advance_width(id)
-        })
-        .unwrap_or(0.33)
 }
 
 #[cfg(test)]
@@ -736,5 +791,119 @@ mod tests {
         });
         assert!(typesetter.hyphens.iter().all(|h| !h));
         assert!(placed.lines.iter().all(|line| line.offset % 14 == 0));
+    }
+
+    fn lay_out_block(block: Block) -> Typesetter {
+        let mut typesetter = Typesetter::new(Settings::default(), Some("en"));
+        let chapter = Chapter {
+            blocks: vec![block],
+        };
+        let at = ChapterRef {
+            index: 0,
+            chapter: &chapter,
+            images: &[],
+        };
+        typesetter.block(at, 0);
+        typesetter
+    }
+
+    fn code(text: &str) -> Span {
+        let mut span = Span::plain(text);
+        span.style.code = true;
+        span
+    }
+
+    /// Each glyph run's font, and the gaps between its glyphs' origins.
+    fn runs(typesetter: &Typesetter) -> Vec<(bool, Vec<f32>)> {
+        let mut runs = Vec::new();
+        for line in typesetter.layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(run) = item {
+                    let mono = fonts::is_mono(run.run().font().data.as_ref());
+                    let xs: Vec<f32> = run.positioned_glyphs().map(|g| g.x).collect();
+                    runs.push((mono, xs.windows(2).map(|w| w[1] - w[0]).collect()));
+                }
+            }
+        }
+        runs
+    }
+
+    #[test]
+    fn justified_inline_code_keeps_its_spacing() {
+        let mut spans = Vec::new();
+        for _ in 0..12 {
+            spans.push(Span::plain("Short words, then "));
+            spans.push(code("let s = String::new();"));
+            spans.push(Span::plain(" and on. "));
+        }
+        let typesetter = lay_out_block(Block {
+            kind: BlockKind::Paragraph {
+                indent_first: false,
+            },
+            indent: 0,
+            align: Align::Default,
+            spans,
+        });
+        let size = Settings::default().font_size * fonts::MONO_SCALE;
+        let cell = typesetter.code_space * size;
+        let mut checked = 0;
+        for (mono, gaps) in runs(&typesetter) {
+            if !mono {
+                continue;
+            }
+            for gap in gaps {
+                assert!(
+                    (gap - cell).abs() < 0.05,
+                    "a {gap} px step in a {cell} px grid"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 100, "only {checked} code glyphs");
+    }
+
+    #[test]
+    fn preformatted_text_is_all_mono() {
+        let typesetter = lay_out_block(Block {
+            kind: BlockKind::Preformatted,
+            indent: 0,
+            align: Align::Default,
+            spans: vec![Span::plain("fn main() {\n    println!(\"hello\");\n}")],
+        });
+        let runs = runs(&typesetter);
+        assert!(runs.len() >= 3, "{runs:?}");
+        assert!(runs.iter().all(|(mono, _)| *mono));
+    }
+
+    #[test]
+    fn wrapped_code_lines_hang() {
+        let long = "// ".to_owned() + &"word ".repeat(40);
+        let typesetter = lay_out_block(Block {
+            kind: BlockKind::Preformatted,
+            indent: 0,
+            align: Align::Default,
+            spans: vec![Span::plain(format!("short\n{long}\nshort"))],
+        });
+        let starts: Vec<f32> = typesetter
+            .layout
+            .lines()
+            // The offset includes the indent.
+            .map(|line| line.metrics().offset)
+            .collect();
+        assert!(starts.len() >= 4, "{starts:?}");
+        let size = Settings::default().font_size * fonts::MONO_SCALE;
+        let hang = 2.0 * typesetter.code_space * size;
+        let last = starts.len() - 1;
+        for (i, start) in starts.iter().enumerate() {
+            let expected = if i == 0 || i == 1 || i == last {
+                0.0
+            } else {
+                hang
+            };
+            assert!(
+                (start - expected).abs() < 0.01,
+                "line {i} at {start}: {starts:?}"
+            );
+        }
     }
 }
