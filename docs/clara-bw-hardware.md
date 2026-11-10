@@ -90,6 +90,16 @@ while Nickel is away, and `udev-sync.sh` replays the backlog once Nickel is back
 `/usr/local/Kobo/imageformats`) has menu entries and generators but no way to run
 anything when Nickel starts.
 
+**Wi-Fi before Nickel.** Nickel brings the MediaTek chip up when it starts (the strings
+are in `libnickel.so`): it loads `wmt_drv.ko`, `wmt_chrdev_wifi.ko` and `wmt_cdev_bt.ko`
+from `/drivers/$PLATFORM/mt66xx/`, then runs `/usr/bin/wmt_loader` and
+`/usr/bin/wmt_launcher -p /lib/firmware`, both in the background. Until those have run,
+`echo 1 >/dev/wmtWifi` fails and dmesg says `wmt lib not ready` and `WMT turn on WIFI
+fail!`. Once they run, dmesg shows the patch download, the Wi-Fi firmware about 1.4 s
+later, and `pwr_on_conn` about a second after that. So `kobo/wifi.sh` does the same
+before Nickel has run. Nickel also turns off the green LED, which blinks from early in
+the boot (trigger `timer`), by writing to `/sys/class/leds/bd71828-green-led/brightness`.
+
 **Leftover daemons.** Restarting Nickel by running `rc.local` again, as KOReader and
 `kobo/reader.sh` do, starts a new session `dbus-daemon` each time and never stops the
 old one. Each new Nickel starts another `wmt_launcher` too. On 2026-11-10, after about

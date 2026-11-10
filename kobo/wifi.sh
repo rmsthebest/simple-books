@@ -3,7 +3,7 @@
 # stopped. It connects to the networks Nickel saved, from Nickel's
 # wpa_supplicant.conf, which is passed by path and never read here.
 #
-#   wifi.sh up        connects and gets an address; fails after about 50 s
+#   wifi.sh up        connects and gets an address; fails within about a minute
 #   wifi.sh down      disconnects and powers the chip off; safe when it's off
 #   wifi.sh address   prints the Wi-Fi address, if it has one
 #
@@ -24,8 +24,8 @@ quiet() {
     "$@" </dev/null >/dev/null 2>&1
 }
 
-# Loads a driver module, if it isn't already. They're loaded at boot and
-# never unloaded, so this is rarely needed.
+# Loads a driver module, if it isn't already. Nickel loads them when it
+# starts and never unloads them, so this is needed before Nickel has run.
 load() {
     grep -q "^$1 " /proc/modules && return 0
     [ -n "${PLATFORM}" ] && quiet insmod "/drivers/${PLATFORM}/mt66xx/$1.ko"
@@ -61,11 +61,20 @@ up() {
             return 1
         fi
     done
-    # Nickel starts this, so it isn't running yet when the reader starts at
-    # boot. It looks after the Wi-Fi and Bluetooth chip.
+    # Nickel starts these once the drivers are in, so before it has run, at
+    # boot, they aren't, and the chip refuses to turn on ("wmt lib not
+    # ready"). wmt_loader sets the driver up and exits; wmt_launcher stays,
+    # loading the chip's patch and looking after it. They get no terminal
+    # and no pipe, so nothing waits on them.
     if ! pkill -0 wmt_launcher; then
-        quiet wmt_launcher -p /lib/firmware &
-        sleep 2
+        wmt_loader </dev/null >/dev/null 2>&1 &
+        loader=$!
+        tries=0
+        while kill -0 "${loader}" 2>/dev/null && [ ${tries} -lt 20 ]; do
+            usleep 250000
+            tries=$((tries + 1))
+        done
+        wmt_launcher -p /lib/firmware </dev/null >/dev/null 2>&1 &
     fi
     # As Nickel does: the driver's debug interface, then power on.
     echo "0xDB9DB9" >/proc/driver/wmt_dbg
@@ -73,7 +82,17 @@ up() {
     sleep 1
     echo "0xDB9DB9" >/proc/driver/wmt_dbg
     echo "7 9 1" >/proc/driver/wmt_dbg
-    echo 1 >/dev/wmtWifi
+    # The driver refuses until the chip is ready: about a second and a half
+    # after the launcher starts, at boot.
+    tries=0
+    until echo 1 >/dev/wmtWifi 2>/dev/null; do
+        tries=$((tries + 1))
+        if [ ${tries} -gt 20 ]; then
+            echo "The Wi-Fi chip didn't turn on."
+            return 1
+        fi
+        usleep 500000
+    done
     sleep 1
     quiet ifconfig "${INTERFACE}" up
 

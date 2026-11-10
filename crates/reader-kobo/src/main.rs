@@ -15,11 +15,11 @@
 //! from `/etc/rc.local` before Nickel has started, which starts it when this
 //! exits. Then it leaves for Nickel straight away if a finger is on the
 //! screen, and once home is up it does what Nickel would: resets the boot
-//! counter (see `docs/clara-bw-hardware.md`), and removes `boot-started`, so
-//! the next boot starts it again. It starts on the home screen, with the
-//! `.book` files in the app folder's `books/`. The app folder also holds the
-//! library index, covers, saved places, preferences and page maps, and
-//! `reader.log`.
+//! counter (see `docs/clara-bw-hardware.md`) and turns the blinking boot
+//! light off. It also removes `boot-started`, so the next boot starts it
+//! again. It starts on the home screen, with the `.book` files in the app
+//! folder's `books/`. The app folder also holds the library index, covers,
+//! saved places, preferences and page maps, and `reader.log`.
 //!
 //! It runs the same [`Session`] as the emulator:
 //!
@@ -82,6 +82,8 @@ const LOG_LIMIT: u64 = 1 << 20;
 /// is up. Still there at the next boot, it means this one never got that
 /// far, so that boot is Nickel's.
 const BOOT_STARTED: &str = "boot-started";
+/// The green LED, blinking from early in the boot.
+const BOOT_LIGHT: &str = "/sys/class/leds/bd71828-green-led/brightness";
 
 static LOG: Mutex<Option<File>> = Mutex::new(None);
 
@@ -330,6 +332,11 @@ fn booted(dir: &Path) {
         Ok(status) if status.success() => {}
         Ok(status) => log!("bootcount-ctl reset: {status}"),
         Err(error) => log!("bootcount-ctl reset: {error}"),
+    }
+    // The boot light blinks until Nickel turns it off; writing 0 also stops
+    // its blink timer.
+    if let Err(error) = fs::write(BOOT_LIGHT, "0") {
+        log!("turning the boot light off: {error}");
     }
     if let Err(error) = fs::remove_file(dir.join(BOOT_STARTED))
         && error.kind() != io::ErrorKind::NotFound
