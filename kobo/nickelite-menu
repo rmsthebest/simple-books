@@ -1,0 +1,1 @@
+menu_item:main:Simple Books:cmd_spawn:quiet:exec /mnt/onboard/.adds/simple-books/reader.sh

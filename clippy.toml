@@ -1,0 +1,2 @@
+# Names that doc comments use as plain words, not code. ".." keeps clippy's own list.
+doc-valid-idents = ["KOReader", "MediaTek", "FBInk", ".."]

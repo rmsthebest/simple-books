@@ -80,6 +80,9 @@ pub enum Event {
     /// Return from a link, from a key in the emulator.
     Back,
     Power,
+    /// Leave for Nickel at once, such as when the power button is held: the
+    /// way out even if the touch panel isn't working.
+    Exit,
     /// [`Session::deadline`] has passed.
     Tick,
 }
@@ -317,6 +320,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let in_menu = matches!(self.mode, Mode::Menu(_));
         let asleep = matches!(self.mode, Mode::Asleep);
         match event {
+            Event::Exit => {
+                self.save(device);
+                return Ok(Flow::Exit);
+            }
             Event::Tick => self.tick(now, device)?,
             Event::Tap { .. } | Event::Power if asleep => self.wake(device, now)?,
             _ if asleep => {}

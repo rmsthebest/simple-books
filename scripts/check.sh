@@ -20,6 +20,13 @@ cargo test --workspace --features ssr
 step "reader engine links for the Kobo"
 cargo build -p reader-core --examples --target armv7-unknown-linux-musleabihf
 
+step "clippy (Kobo app)"
+cargo clippy -p reader-kobo --target armv7-unknown-linux-musleabihf -- -D warnings
+
+step "launch scripts parse"
+sh -n kobo/reader.sh
+sh -n scripts/kobo-deploy.sh
+
 step "sqlx cache is current"
 scripts/sqlx-prepare.sh --check
 

@@ -1,0 +1,18 @@
+[package]
+name = "reader-kobo"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The simple-books reader on the Kobo Clara BW: its screen, touch panel, buttons, light and sleep."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+book-format = { path = "../book-format" }
+libc = "0.2"
+reader-app = { path = "../reader-app" }
+reader-core = { path = "../reader-core" }

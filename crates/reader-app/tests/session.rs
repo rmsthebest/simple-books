@@ -386,3 +386,17 @@ fn turning_by_key_works_too() {
     run.send(Event::Turn(Turn::Next));
     assert_eq!(run.page().unwrap().page, page.page + 1);
 }
+
+#[test]
+fn exit_leaves_from_anywhere_and_saves_the_place() {
+    let mut run = Run::new();
+    run.tap(FORWARD.0, FORWARD.1);
+    run.tap(MENU.0, MENU.1);
+    assert_eq!(run.send(Event::Exit), Flow::Exit);
+    assert!(run.device.files.keys().any(|k| k.starts_with("position-")));
+    // Asleep too.
+    let mut run = Run::new();
+    run.device.can_suspend = false;
+    run.send(Event::Power);
+    assert_eq!(run.send(Event::Exit), Flow::Exit);
+}
