@@ -428,6 +428,11 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         Some(&last.text)
     }
 
+    /// When the last sync or pairing ended, in seconds since 1970.
+    pub fn last_sync_at(&self) -> Option<u64> {
+        Some(self.syncer.as_ref()?.status.last.as_ref()?.at)
+    }
+
     /// Turns on syncing with a server, and syncs if already paired.
     pub fn enable_sync(&mut self, setup: SyncSetup, device: &mut dyn Device, now: Instant) {
         let status = load_json(device, sync::STATUS).unwrap_or_default();

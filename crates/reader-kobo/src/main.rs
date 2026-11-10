@@ -163,6 +163,10 @@ fn run(dir: &Path) -> io::Result<()> {
     // press, such as after the press that woke the device, does nothing.
     let mut power_down: Option<Instant> = None;
     let mut tick_at = session.deadline(Instant::now());
+    // For logging each sync as it ends: when the job started, and the last
+    // result logged.
+    let mut job_started = session.syncing().then(Instant::now);
+    let mut last_logged = session.last_sync_at();
     loop {
         let timeout = tick_at.saturating_duration_since(Instant::now());
         let mut fds = vec![touch.as_fd(), power.as_fd()];
@@ -224,7 +228,29 @@ fn run(dir: &Path) -> io::Result<()> {
                 Err(error) => return Err(io::Error::other(error)),
             }
         }
+        log_sync(&session, &mut job_started, &mut last_logged);
         tick_at = session.deadline(Instant::now());
+    }
+}
+
+/// Logs how a sync or pairing went, once it ends. Never the pairing code.
+fn log_sync(
+    session: &Session<File>,
+    job_started: &mut Option<Instant>,
+    last_logged: &mut Option<u64>,
+) {
+    if session.syncing() {
+        job_started.get_or_insert_with(Instant::now);
+        return;
+    }
+    let took = job_started.take().map(|started| started.elapsed());
+    if session.last_sync_at() != *last_logged {
+        *last_logged = session.last_sync_at();
+        let said = session.last_sync().unwrap_or_default();
+        match took {
+            Some(took) => log!("sync ended after {took:?}: {said}"),
+            None => log!("sync ended: {said}"),
+        }
     }
 }
 
