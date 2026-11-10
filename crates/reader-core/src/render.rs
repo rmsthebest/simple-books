@@ -248,9 +248,12 @@ pub(crate) fn image(
     if gray.width() == width && gray.height() == height {
         canvas.copy(left, top, width, height, gray.as_raw());
     } else {
-        let scaled =
-            image::imageops::resize(gray, width, height, image::imageops::FilterType::Triangle);
-        canvas.copy(left, top, width, height, scaled.as_raw());
+        let scaled = crate::scale::scale(
+            gray.as_raw(),
+            (gray.width() as usize, gray.height() as usize),
+            (width as usize, height as usize),
+        );
+        canvas.copy(left, top, width, height, &scaled);
     }
 }
 

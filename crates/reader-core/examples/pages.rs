@@ -141,8 +141,12 @@ fn time_opens(
     let opened = started.elapsed();
     let started = Instant::now();
     reader.page().unwrap();
+    let drawn = started.elapsed();
+    let started = Instant::now();
+    reader.prepare().unwrap();
     println!(
-        "opened cold in {opened:?}, and drew the first page in {:?}",
+        "opened cold in {opened:?}, drew the first page in {drawn:?}, and had both its \
+         neighbours ready {:?} after that",
         started.elapsed()
     );
 

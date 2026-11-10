@@ -280,7 +280,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             offset: 0,
         });
         let settings = preferences.settings();
-        let (reader, background) = open_reader(&open, book_key, &settings, at, false, device)?;
+        let reader = open_reader(&open, book_key, &settings, at, false, device)?;
         let mut session = Self {
             open,
             book_key,
@@ -295,7 +295,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             ignored: 0,
             last_touch: now,
             woke: None,
-            background,
+            background: None,
             anchor: None,
         };
         session.show_page(device, Refresh::Full, now)?;
@@ -460,7 +460,36 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         }
         self.guard.refreshing(now + refresh.duration());
         self.reader.prepare()?;
+        self.paginate_in_background();
         Ok(())
+    }
+
+    /// Starts laying out the rest of the book on another thread, if it isn't
+    /// all laid out and that isn't already under way. Only once the screen
+    /// is drawn: the Clara BW has one core, and the thread would take half
+    /// of it from drawing the page.
+    fn paginate_in_background(&mut self) {
+        if self.background.is_some() || self.reader.page_map().is_complete() {
+            return;
+        }
+        let (send, receive) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut map = self.reader.page_map().clone();
+        let open = Arc::clone(&self.open);
+        let thread_stop = Arc::clone(&stop);
+        let settings = self.reader.settings().clone();
+        std::thread::spawn(move || {
+            let Ok(mut book) = open() else {
+                return;
+            };
+            let result = paginate_book(&mut book, settings, &mut map, || {
+                thread_stop.load(Ordering::Relaxed)
+            });
+            if result.is_ok() && map.is_complete() {
+                let _ = send.send(map);
+            }
+        });
+        self.background = Some(Background { receive, stop });
     }
 
     fn tick(&mut self, now: Instant, device: &mut dyn Device) -> Result<(), AppError> {
@@ -552,6 +581,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         }
         device.show(&self.screen, Refresh::Partial);
         self.guard.refreshing(now + Refresh::Partial.duration());
+        self.paginate_in_background();
         Ok(())
     }
 
@@ -654,10 +684,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         self.anchor = Some(at);
         self.background = None;
         let settings = self.preferences.settings();
-        let (reader, background) =
-            open_reader(&self.open, self.book_key, &settings, at, true, device)?;
-        self.reader = reader;
-        self.background = background;
+        self.reader = open_reader(&self.open, self.book_key, &settings, at, true, device)?;
         if matches!(self.mode, Mode::Menu(_)) {
             self.draw_menu(device, now)?;
         }
@@ -665,8 +692,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     }
 }
 
-/// Opens the reader with its saved page map, and starts paginating the rest
-/// of the book in the background if the map isn't complete. With `relayout`,
+/// Opens the reader with its saved page map. With `relayout`,
 /// the settings have just changed, and the line at `at` stays at the top of
 /// its page; see [`Reader::relayout`].
 fn open_reader<R: Read + Seek + Send + 'static>(
@@ -676,7 +702,7 @@ fn open_reader<R: Read + Seek + Send + 'static>(
     at: Position,
     relayout: bool,
     device: &mut dyn Device,
-) -> Result<(Reader<R>, Option<Background>), AppError> {
+) -> Result<Reader<R>, AppError> {
     let key = PageMap::key(book_key, settings);
     let cached: Option<PageMap> = load_json(device, &pages_file(key));
     let reader = if relayout {
@@ -684,32 +710,12 @@ fn open_reader<R: Read + Seek + Send + 'static>(
     } else {
         Reader::open(open()?, settings.clone(), book_key, at, cached)?
     };
-    if reader.page_map().is_complete() {
-        if relayout {
-            // There's no background pagination to save it, and the page
-            // at `at` has moved from where a saved map has it.
-            save_json(device, &pages_file(key), reader.page_map());
-        }
-        return Ok((reader, None));
+    if relayout && reader.page_map().is_complete() {
+        // There's no background pagination to save it, and the page at `at`
+        // has moved from where a saved map has it.
+        save_json(device, &pages_file(key), reader.page_map());
     }
-    let (send, receive) = mpsc::channel();
-    let stop = Arc::new(AtomicBool::new(false));
-    let mut map = reader.page_map().clone();
-    let thread_open = Arc::clone(open);
-    let thread_stop = Arc::clone(&stop);
-    let thread_settings = settings.clone();
-    std::thread::spawn(move || {
-        let Ok(mut book) = thread_open() else {
-            return;
-        };
-        let result = paginate_book(&mut book, thread_settings, &mut map, || {
-            thread_stop.load(Ordering::Relaxed)
-        });
-        if result.is_ok() && map.is_complete() {
-            let _ = send.send(map);
-        }
-    });
-    Ok((reader, Some(Background { receive, stop })))
+    Ok(reader)
 }
 
 fn stepped(value: u8, step: menu::Step, by: u8, max: u8) -> u8 {

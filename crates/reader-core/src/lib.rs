@@ -22,6 +22,7 @@ mod knuth_plass;
 mod paginate;
 mod reader;
 mod render;
+mod scale;
 mod typeset;
 
 use serde::{Deserialize, Serialize};
