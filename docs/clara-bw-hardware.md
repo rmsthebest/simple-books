@@ -97,8 +97,10 @@ from `/drivers/$PLATFORM/mt66xx/`, then runs `/usr/bin/wmt_loader` and
 `echo 1 >/dev/wmtWifi` fails and dmesg says `wmt lib not ready` and `WMT turn on WIFI
 fail!`. Once they run, dmesg shows the patch download, the Wi-Fi firmware about 1.4 s
 later, and `pwr_on_conn` about a second after that. So `kobo/wifi.sh` does the same
-before Nickel has run. Nickel also turns off the green LED, which blinks from early in
-the boot (trigger `timer`), by writing to `/sys/class/leds/bd71828-green-led/brightness`.
+before Nickel has run. Nickel also turns off the white LED, which blinks from early in
+the boot (trigger `timer`), by writing 0 to `/sys/class/leds/LED/brightness`; writing 0
+also sets the trigger to `none`. `libnickel.so` also names
+`/sys/class/leds/bd71828-green-led/brightness`, for other models' LED.
 
 **Leftover daemons.** Restarting Nickel by running `rc.local` again, as KOReader and
 `kobo/reader.sh` do, starts a new session `dbus-daemon` each time and never stops the

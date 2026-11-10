@@ -82,8 +82,12 @@ const LOG_LIMIT: u64 = 1 << 20;
 /// is up. Still there at the next boot, it means this one never got that
 /// far, so that boot is Nickel's.
 const BOOT_STARTED: &str = "boot-started";
-/// The green LED, blinking from early in the boot.
-const BOOT_LIGHT: &str = "/sys/class/leds/bd71828-green-led/brightness";
+/// The LEDs Nickel turns off once it's up: on the Clara BW the white one,
+/// `LED`, blinks from early in the boot. The green one is other models'.
+const BOOT_LIGHTS: [&str; 2] = [
+    "/sys/class/leds/LED/brightness",
+    "/sys/class/leds/bd71828-green-led/brightness",
+];
 
 static LOG: Mutex<Option<File>> = Mutex::new(None);
 
@@ -335,8 +339,12 @@ fn booted(dir: &Path) {
     }
     // The boot light blinks until Nickel turns it off; writing 0 also stops
     // its blink timer.
-    if let Err(error) = fs::write(BOOT_LIGHT, "0") {
-        log!("turning the boot light off: {error}");
+    for light in BOOT_LIGHTS {
+        if Path::new(light).exists()
+            && let Err(error) = fs::write(light, "0")
+        {
+            log!("turning {light} off: {error}");
+        }
     }
     if let Err(error) = fs::remove_file(dir.join(BOOT_STARTED))
         && error.kind() != io::ErrorKind::NotFound

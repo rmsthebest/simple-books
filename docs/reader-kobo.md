@@ -167,7 +167,7 @@ shows a message saying what it did.
   `rc.local`, but `boot.sh` then returns at once.
 - **The boot counter:** the Kobo offers a factory reset after four boots in a row that
   didn't finish, and normally Nickel tells it each boot finished. When the reader starts
-  at boot it does that instead, once its home screen is up, and turns off the green
+  at boot it does that instead, once its home screen is up, and turns off the white
   light that blinks while the Kobo starts. See
   [`clara-bw-hardware.md`](clara-bw-hardware.md).
 - **Wi-Fi at boot:** Nickel hasn't run yet, so the Wi-Fi chip isn't set up. `wifi.sh`
