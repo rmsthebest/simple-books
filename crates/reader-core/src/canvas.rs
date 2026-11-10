@@ -38,7 +38,8 @@ impl Canvas {
         &self.pixels
     }
 
-    pub(crate) fn clear(&mut self) {
+    /// Makes the whole page white.
+    pub fn clear(&mut self) {
         self.pixels.fill(WHITE);
     }
 
@@ -52,6 +53,11 @@ impl Canvas {
                 *dst = ((u16::from(*dst) * keep + 127) / 255) as u8;
             }
         });
+    }
+
+    /// Paints a rectangle one shade of grey, clipped to the page.
+    pub fn fill(&mut self, left: i32, top: i32, width: u32, height: u32, gray: u8) {
+        self.each_row(left, top, width, height, |row, _, _, _| row.fill(gray));
     }
 
     /// Draws an underline, leaving a `gap` around ink already in its way,

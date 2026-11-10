@@ -8,45 +8,35 @@
 //! The window is half size unless `--full` is given, since the page is
 //! 1448 pixels tall.
 //!
-//! - Click the left third of the page, or press ← or Page Up, to go back a
-//!   page. Click elsewhere, or press →, Page Down or Space, to go forward.
-//! - Click a link to follow it, and press Backspace to return.
+//! It runs the same [`Session`] as the Kobo, with the mouse as the finger:
+//!
+//! - Click the left third of the page to go back a page, and elsewhere to go
+//!   forward. Click a link to follow it, and the top of the page for the
+//!   menu.
+//! - ← and Page Up go back, → Page Down and Space forward, and Backspace
+//!   returns from a link. `P` is the power button.
 //! - `+` and `-` change the text size, `H` toggles hyphenation, `J`
 //!   justification and `K` Knuth–Plass line breaking. `[` and `]` change the
-//!   text weight, and `,` and `.` its gamma, to try darker text for e-ink.
+//!   text weight, and `,` and `.` its gamma.
 //! - `Q` or Esc quits.
 //!
-//! A turn shows the new page only after the panel's refresh time from
-//! `docs/clara-bw-hardware.md`, with a black-and-white flash every
-//! [`FULL_EVERY`] turns, and the [`TurnGuard`] ignores taps meanwhile, as on
-//! the device. The page map and the last position are kept in the user's
-//! cache directory, so a book reopens where it was left.
+//! A new page appears only after the panel's refresh time from
+//! `docs/clara-bw-hardware.md`, and a full refresh flashes black and white.
+//! The emulator doesn't suspend: the sleep screen stays up until a click.
+//! Positions, preferences and page maps are kept in the user's cache
+//! directory, so a book reopens where it was left.
 #![forbid(unsafe_code)]
-#![allow(clippy::cast_precision_loss, reason = "timings and pixel sizes")]
+#![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
-use std::{
-    io::Cursor,
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-    time::{Duration, Instant},
-};
+use std::{io::Cursor, path::PathBuf, sync::Arc, time::Instant};
 
-use book_format::{BookReader, Limits, Position};
+use book_format::{BookReader, Limits};
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
-use reader_core::{Canvas, PageMap, Reader, Settings, Turn, TurnGuard, paginate_book};
+use reader_app::{
+    Battery, Device, Event, Flow, Light, Opener, Preferences, Refresh, Session, Turn,
+};
+use reader_core::{Canvas, Settings};
 
-/// GL16, the grey partial refresh for page turns: 281 ms on the device.
-const PARTIAL: Duration = Duration::from_millis(281);
-/// GC16 with a full update: 352–412 ms. It's shown as a flash.
-const FULL: Duration = Duration::from_millis(400);
-/// A full refresh clears ghosting every this many turns.
-const FULL_EVERY: u32 = 6;
-
-type Book = BookReader<Cursor<Vec<u8>>>;
 type Source = Cursor<Vec<u8>>;
 
 fn main() {
@@ -75,10 +65,18 @@ fn main() {
     let mut hash = Fnv::default();
     hash.write(&bytes);
     let book_key = hash.0;
-    let cache = Cache::new(book_key);
+    let open: Opener<Source> =
+        Arc::new(move || BookReader::open(Cursor::new(bytes.as_ref().clone()), Limits::default()));
 
-    let mut settings = Settings::default();
-    let mut app = App::open(&bytes, book_key, &cache, settings.clone(), cache.position());
+    let settings = Settings::default();
+    let mut panel = Panel::new(settings.width, settings.height);
+    let started = Instant::now();
+    let mut session = Session::start(open, book_key, &mut panel, started).unwrap_or_else(|error| {
+        eprintln!("can't open the book: {error}");
+        std::process::exit(1);
+    });
+    println!("opened in {:?}", started.elapsed());
+
     let (width, height) = (
         settings.width as usize / divisor,
         settings.height as usize / divisor,
@@ -92,116 +90,128 @@ fn main() {
 
     let mut screen = vec![0u32; width * height];
     let mut was_down = false;
+    let mut tick_at = session.deadline(Instant::now());
     while window.is_open() && !window.is_key_down(Key::Escape) && !window.is_key_down(Key::Q) {
         let now = Instant::now();
-        let (action, changed) = keys(&window, &mut settings);
-        let down = window.get_mouse_down(MouseButton::Left);
-        let action = if down && !was_down {
-            window
-                .get_mouse_pos(MouseMode::Discard)
-                .map(|(x, y)| {
-                    tap(
-                        &app.reader,
-                        &settings,
-                        x * divisor as f32,
-                        y * divisor as f32,
-                    )
-                })
-                .or(action)
-        } else {
-            action
-        };
-        was_down = down;
-
-        if let Some(size) = changed {
-            settings.font_size = size.clamp(24.0, 80.0);
-            let at = app.reader.position().unwrap_or(START);
-            cache.save(&app.reader);
-            app = App::open(&bytes, book_key, &cache, settings.clone(), Some(at));
-            println!(
-                "text {} px, weight {}, gamma {}, hyphenation {}, justified {}, Knuth–Plass {}",
-                settings.font_size,
-                settings.weight,
-                settings.gamma,
-                settings.hyphenate,
-                settings.justify,
-                settings.optimal_breaks
-            );
-        } else if let Some(action) = action {
-            app.act(action, now);
+        let mut events = Vec::new();
+        for key in window.get_keys_pressed(KeyRepeat::Yes) {
+            if let Some(event) = key_event(key) {
+                events.push(event);
+            } else if let Some(change) = preference_key(key) {
+                if let Err(error) = session.update_preferences(&mut panel, now, change) {
+                    eprintln!("{error}");
+                }
+                print_preferences(session.preferences());
+            }
         }
-        app.tick(now);
+        let down = window.get_mouse_down(MouseButton::Left);
+        if down
+            && !was_down
+            && let Some((x, y)) = window.get_mouse_pos(MouseMode::Discard)
+        {
+            events.push(Event::Tap {
+                x: x * divisor as f32,
+                y: y * divisor as f32,
+            });
+        }
+        was_down = down;
+        if now >= tick_at {
+            events.push(Event::Tick);
+        }
 
-        app.shown(now).show(&mut screen, divisor);
-        window.set_title(&app.title());
+        let mut exit = false;
+        for event in events {
+            match session.handle(event, now, &mut panel) {
+                Ok(Flow::Continue) => {}
+                Ok(Flow::Exit) => exit = true,
+                Err(error) => eprintln!("{error}"),
+            }
+            tick_at = session.deadline(now);
+        }
+        if exit {
+            println!("exit to Nickel");
+            break;
+        }
+
+        panel.shown(now).show(&mut screen, divisor);
+        window.set_title(&title(&session));
         if window.update_with_buffer(&screen, width, height).is_err() {
             break;
         }
     }
-    cache.save(&app.reader);
-    if let Some(position) = app.reader.position() {
+    session.save(&mut panel);
+    if let Some(position) = session.reader().position() {
         println!("left at {position:?}");
     }
 }
 
-/// What the keys pressed ask for: an action, or the text size to reopen the
-/// book at after a change to `settings`.
-fn keys(window: &Window, settings: &mut Settings) -> (Option<Action>, Option<f32>) {
-    let mut action = None;
-    let mut changed = None;
-    for key in window.get_keys_pressed(KeyRepeat::Yes) {
-        match key {
-            Key::Right | Key::PageDown | Key::Space => action = Some(Action::Turn(Turn::Next)),
-            Key::Left | Key::PageUp => action = Some(Action::Turn(Turn::Previous)),
-            Key::Backspace => action = Some(Action::Back),
-            Key::Equal | Key::NumPadPlus => changed = Some(settings.font_size + 4.0),
-            Key::Minus | Key::NumPadMinus => changed = Some(settings.font_size - 4.0),
-            Key::H => {
-                settings.hyphenate = !settings.hyphenate;
-                changed = Some(settings.font_size);
-            }
-            Key::J => {
-                settings.justify = !settings.justify;
-                changed = Some(settings.font_size);
-            }
-            Key::K => {
-                settings.optimal_breaks = !settings.optimal_breaks;
-                changed = Some(settings.font_size);
-            }
-            Key::LeftBracket | Key::RightBracket => {
-                let step = if key == Key::LeftBracket { -50.0 } else { 50.0 };
-                settings.weight = (settings.weight + step).clamp(300.0, 700.0);
-                changed = Some(settings.font_size);
-            }
-            Key::Comma | Key::Period => {
-                let step = if key == Key::Comma { -0.2 } else { 0.2 };
-                // Rounded, so repeated steps land on tenths.
-                settings.gamma = ((settings.gamma + step).clamp(0.6, 3.0) * 10.0).round() / 10.0;
-                changed = Some(settings.font_size);
-            }
-            _ => {}
+fn key_event(key: Key) -> Option<Event> {
+    Some(match key {
+        Key::Right | Key::PageDown | Key::Space => Event::Turn(Turn::Next),
+        Key::Left | Key::PageUp => Event::Turn(Turn::Previous),
+        Key::Backspace => Event::Back,
+        Key::P => Event::Power,
+        _ => return None,
+    })
+}
+
+/// A change to the preferences.
+type Change = Box<dyn FnOnce(&mut Preferences)>;
+
+/// A key that changes a preference, as the change it makes.
+fn preference_key(key: Key) -> Option<Change> {
+    Some(match key {
+        Key::Equal | Key::NumPadPlus => Box::new(|p| p.font_size = (p.font_size + 4.0).min(80.0)),
+        Key::Minus | Key::NumPadMinus => Box::new(|p| p.font_size = (p.font_size - 4.0).max(24.0)),
+        Key::H => Box::new(|p| p.hyphenate = !p.hyphenate),
+        Key::J => Box::new(|p| p.justify = !p.justify),
+        Key::K => Box::new(|p| p.optimal_breaks = !p.optimal_breaks),
+        Key::LeftBracket => Box::new(|p| p.weight = (p.weight - 50.0).max(300.0)),
+        Key::RightBracket => Box::new(|p| p.weight = (p.weight + 50.0).min(700.0)),
+        // Rounded, so repeated steps land on tenths.
+        Key::Comma => Box::new(|p| p.gamma = ((p.gamma - 0.2).max(0.6) * 10.0).round() / 10.0),
+        Key::Period => Box::new(|p| p.gamma = ((p.gamma + 0.2).min(3.0) * 10.0).round() / 10.0),
+        _ => return None,
+    })
+}
+
+fn print_preferences(p: &Preferences) {
+    println!(
+        "text {} px, weight {}, gamma {}, hyphenation {}, justified {}, Knuth–Plass {}",
+        p.font_size, p.weight, p.gamma, p.hyphenate, p.justify, p.optimal_breaks
+    );
+}
+
+fn title(session: &Session<Source>) -> String {
+    use std::fmt::Write;
+    let reader = session.reader();
+    let map = reader.page_map();
+    let page = reader.current();
+    let number = page.and_then(|p| map.number(p)).map(|n| n + 1);
+    let mut title = format!("{} — ", reader.manifest().title);
+    match (number, map.total(), page) {
+        (Some(n), Some(total), _) => {
+            let _ = write!(title, "page {n} of {total}");
         }
+        (_, _, Some(page)) => {
+            let _ = write!(
+                title,
+                "chapter {}, page {}",
+                page.chapter + 1,
+                page.page + 1
+            );
+        }
+        _ => {}
     }
-    (action, changed)
-}
-
-/// What a tap at (`x`, `y`) on the page does: follows a link if it's on one,
-/// otherwise turns back in the left third and forward elsewhere.
-fn tap(reader: &Reader<Source>, settings: &Settings, x: f32, y: f32) -> Action {
-    if let Some(target) = reader.link_at(x, y) {
-        Action::Follow(target)
-    } else if x < settings.width as f32 / 3.0 {
-        Action::Turn(Turn::Previous)
-    } else {
-        Action::Turn(Turn::Next)
+    if reader.can_go_back() {
+        title += " — Backspace returns";
     }
+    let ignored = session.ignored_turns();
+    if ignored > 0 {
+        let _ = write!(title, " — {ignored} turns ignored");
+    }
+    title
 }
-
-const START: Position = Position {
-    chapter: 0,
-    block: 0,
-    offset: 0,
-};
 
 fn load(path: &PathBuf) -> Result<Vec<u8>, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
@@ -222,11 +232,92 @@ fn load(path: &PathBuf) -> Result<Vec<u8>, String> {
     }
 }
 
-fn open_book(bytes: &[u8]) -> Book {
-    BookReader::open(Cursor::new(bytes.to_vec()), Limits::default()).unwrap_or_else(|error| {
-        eprintln!("can't open the book: {error}");
-        std::process::exit(1);
-    })
+/// The emulated panel and the rest of the device.
+struct Panel {
+    /// What the panel shows once the refresh under way ends.
+    next: Canvas,
+    /// What it showed before, still up during a partial refresh.
+    before: Canvas,
+    refresh: Option<(Instant, Refresh)>,
+    light: Light,
+    /// Positions, preferences and page maps, in
+    /// `$XDG_CACHE_HOME/simple-books-emu`.
+    dir: Option<PathBuf>,
+}
+
+impl Panel {
+    fn new(width: u32, height: u32) -> Self {
+        let dir = std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+            .map(|dir| dir.join("simple-books-emu"));
+        Self {
+            next: Canvas::new(width, height),
+            before: Canvas::new(width, height),
+            refresh: None,
+            light: Light {
+                brightness: 30,
+                warmth: 4,
+            },
+            dir,
+        }
+    }
+
+    /// What the panel shows at `now`: the old page until a partial refresh
+    /// ends, and black then white for the first two thirds of a full one.
+    fn shown(&self, now: Instant) -> Shown<'_> {
+        let Some((started, refresh)) = self.refresh else {
+            return Shown::Page(&self.next);
+        };
+        let elapsed = now.duration_since(started);
+        let length = refresh.duration();
+        match refresh {
+            _ if elapsed >= length => Shown::Page(&self.next),
+            Refresh::Partial => Shown::Page(&self.before),
+            Refresh::Full if elapsed < length / 3 => Shown::Flat(0),
+            Refresh::Full if elapsed < length * 2 / 3 => Shown::Flat(255),
+            Refresh::Full => Shown::Page(&self.next),
+        }
+    }
+}
+
+impl Device for Panel {
+    fn show(&mut self, screen: &Canvas, refresh: Refresh) {
+        std::mem::swap(&mut self.before, &mut self.next);
+        self.next.clone_from(screen);
+        self.refresh = Some((Instant::now(), refresh));
+    }
+
+    fn battery(&mut self) -> Option<Battery> {
+        None
+    }
+
+    fn light(&mut self) -> Light {
+        self.light
+    }
+
+    fn set_light(&mut self, light: Light) {
+        self.light = light;
+        println!("front light {}%, warmth {}", light.brightness, light.warmth);
+    }
+
+    fn suspend(&mut self) -> bool {
+        println!("asleep; the emulator doesn't suspend, so click to wake");
+        false
+    }
+
+    fn load(&mut self, name: &str) -> Option<Vec<u8>> {
+        std::fs::read(self.dir.as_ref()?.join(name)).ok()
+    }
+
+    fn save(&mut self, name: &str, bytes: &[u8]) {
+        let Some(dir) = &self.dir else {
+            return;
+        };
+        if std::fs::create_dir_all(dir).is_ok() {
+            let _ = std::fs::write(dir.join(name), bytes);
+        }
+    }
 }
 
 /// What the window shows while a refresh is under way.
@@ -265,263 +356,6 @@ impl Shown<'_> {
 fn rgb(gray: u8) -> u32 {
     let g = u32::from(gray);
     (g << 16) | (g << 8) | g
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Action {
-    Turn(Turn),
-    Follow(Position),
-    Back,
-}
-
-struct Refresh {
-    started: Instant,
-    full: bool,
-}
-
-struct App {
-    reader: Reader<Source>,
-    guard: TurnGuard,
-    /// The page on the panel, which stays up until a refresh finishes.
-    on_panel: Canvas,
-    refresh: Option<Refresh>,
-    turns: u32,
-    ignored: u32,
-    last_draw: Option<(Duration, bool)>,
-    background: mpsc::Receiver<PageMap>,
-    stop: Arc<AtomicBool>,
-}
-
-impl Drop for App {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-    }
-}
-
-impl App {
-    fn open(
-        bytes: &Arc<Vec<u8>>,
-        book_key: u64,
-        cache: &Cache,
-        settings: Settings,
-        at: Option<Position>,
-    ) -> Self {
-        let key = PageMap::key(book_key, &settings);
-        let started = Instant::now();
-        let mut reader = Reader::open(
-            open_book(bytes),
-            settings.clone(),
-            book_key,
-            at.unwrap_or(START),
-            cache.map(key),
-        )
-        .unwrap_or_else(|error| {
-            eprintln!("can't open the book: {error}");
-            std::process::exit(1);
-        });
-        let on_panel = reader
-            .page()
-            .ok()
-            .flatten()
-            .cloned()
-            .unwrap_or_else(|| Canvas::new(settings.width, settings.height));
-        println!("opened in {:?}", started.elapsed());
-
-        // The rest of the book is paginated on another thread, as on the device.
-        let (send, background) = mpsc::channel();
-        let stop = Arc::new(AtomicBool::new(false));
-        if !reader.page_map().is_complete() {
-            let bytes = Arc::clone(bytes);
-            let stop = Arc::clone(&stop);
-            let mut map = reader.page_map().clone();
-            std::thread::spawn(move || {
-                let started = Instant::now();
-                let mut book = open_book(&bytes);
-                let result = paginate_book(&mut book, settings, &mut map, || {
-                    stop.load(Ordering::Relaxed)
-                });
-                if result.is_ok() && map.is_complete() {
-                    println!(
-                        "paginated {} pages in the background in {:?}",
-                        map.total().unwrap_or(0),
-                        started.elapsed()
-                    );
-                    let _ = send.send(map);
-                }
-            });
-        }
-        Self {
-            reader,
-            guard: TurnGuard::default(),
-            on_panel,
-            refresh: None,
-            turns: 0,
-            ignored: 0,
-            last_draw: None,
-            background,
-            stop,
-        }
-    }
-
-    fn act(&mut self, action: Action, now: Instant) {
-        if !self.guard.allow(now) {
-            self.ignored += 1;
-            return;
-        }
-        let moved = match action {
-            Action::Turn(turn) => self.reader.turn(turn),
-            Action::Follow(target) => self.reader.follow(target).map(|()| true),
-            Action::Back => self.reader.back(),
-        };
-        if !matches!(moved, Ok(true)) {
-            return;
-        }
-        let cached = self
-            .reader
-            .current()
-            .is_some_and(|p| self.reader.is_drawn(p));
-        let started = Instant::now();
-        let Ok(Some(canvas)) = self.reader.page() else {
-            return;
-        };
-        self.on_panel.clone_from(canvas);
-        self.last_draw = Some((started.elapsed(), cached));
-
-        self.turns += 1;
-        let full = self.turns.is_multiple_of(FULL_EVERY);
-        self.guard
-            .refreshing(now + if full { FULL } else { PARTIAL });
-        self.refresh = Some(Refresh { started: now, full });
-    }
-
-    fn tick(&mut self, now: Instant) {
-        if let Ok(map) = self.background.try_recv() {
-            self.reader.adopt(&map);
-        }
-        if let Some(refresh) = &self.refresh {
-            let length = if refresh.full { FULL } else { PARTIAL };
-            if now.duration_since(refresh.started) >= length {
-                self.refresh = None;
-                self.guard.refreshed();
-                // Idle: get both neighbours ready for the next turn.
-                let started = Instant::now();
-                if self.reader.prepare().is_ok() {
-                    let elapsed = started.elapsed();
-                    if elapsed > Duration::from_millis(20) {
-                        println!("preparing the next pages took {elapsed:?}");
-                    }
-                }
-            }
-        } else if self.turns == 0 {
-            let _ = self.reader.prepare();
-        }
-    }
-
-    /// What the panel shows at `now`: the old page until the refresh ends,
-    /// or for a full refresh, black then white then the new page.
-    fn shown(&self, now: Instant) -> Shown<'_> {
-        if let Some(refresh) = &self.refresh
-            && refresh.full
-        {
-            let elapsed = now.duration_since(refresh.started);
-            if elapsed < FULL / 3 {
-                return Shown::Flat(0);
-            } else if elapsed < FULL * 2 / 3 {
-                return Shown::Flat(255);
-            }
-        }
-        Shown::Page(&self.on_panel)
-    }
-
-    fn title(&self) -> String {
-        use std::fmt::Write;
-        let map = self.reader.page_map();
-        let page = self.reader.current();
-        let number = page.and_then(|p| map.number(p)).map(|n| n + 1);
-        let mut title = format!("{} — ", self.reader.manifest().title);
-        match (number, map.total(), page) {
-            (Some(n), Some(total), _) => {
-                let _ = write!(title, "page {n} of {total}");
-            }
-            (_, _, Some(page)) => {
-                let _ = write!(
-                    title,
-                    "chapter {}, page {}",
-                    page.chapter + 1,
-                    page.page + 1
-                );
-            }
-            _ => {}
-        }
-        match self.last_draw {
-            Some((_, true)) => title += " — from the cache",
-            Some((elapsed, false)) => {
-                let _ = write!(
-                    title,
-                    " — drawn in {:.1} ms",
-                    elapsed.as_secs_f64() * 1000.0
-                );
-            }
-            None => {}
-        }
-        if self.reader.can_go_back() {
-            title += " — Backspace returns";
-        }
-        if self.ignored > 0 {
-            let _ = write!(title, " — {} turns ignored", self.ignored);
-        }
-        title
-    }
-}
-
-/// Page maps and last positions, in `$XDG_CACHE_HOME/simple-books-emu`.
-struct Cache {
-    dir: Option<PathBuf>,
-    book: u64,
-}
-
-impl Cache {
-    fn new(book: u64) -> Self {
-        let dir = std::env::var_os("XDG_CACHE_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
-            .map(|dir| dir.join("simple-books-emu"));
-        Self { dir, book }
-    }
-
-    fn file(&self, name: &str) -> Option<PathBuf> {
-        self.dir.as_ref().map(|dir| dir.join(name))
-    }
-
-    fn position(&self) -> Option<Position> {
-        let bytes = std::fs::read(self.file(&format!("{:016x}.position.json", self.book))?).ok()?;
-        serde_json::from_slice(&bytes).ok()
-    }
-
-    fn map(&self, key: u64) -> Option<PageMap> {
-        let bytes = std::fs::read(self.file(&format!("{key:016x}.pages.json"))?).ok()?;
-        serde_json::from_slice(&bytes).ok()
-    }
-
-    fn save(&self, reader: &Reader<Source>) {
-        let Some(dir) = &self.dir else {
-            return;
-        };
-        if std::fs::create_dir_all(dir).is_err() {
-            return;
-        }
-        if let Some(position) = reader.position()
-            && let Ok(json) = serde_json::to_vec(&position)
-        {
-            let _ = std::fs::write(dir.join(format!("{:016x}.position.json", self.book)), json);
-        }
-        let map = reader.page_map();
-        if map.is_complete()
-            && let Ok(json) = serde_json::to_vec(map)
-        {
-            let _ = std::fs::write(dir.join(format!("{:016x}.pages.json", map.key)), json);
-        }
-    }
 }
 
 /// 64-bit FNV-1a, to tell books apart.

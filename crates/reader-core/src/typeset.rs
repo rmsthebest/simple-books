@@ -290,7 +290,7 @@ impl Typesetter {
             let baseline = y0 + line.metrics().baseline;
             let size = self.settings.font_size * style.scale;
             let gap = self.settings.font_size * 0.5;
-            self.lay_out_aux(marker, size);
+            self.lay_out_aux(marker, size, self.settings.weight_above(0.0));
             let x = x0 - gap - self.aux.width();
             self.draw_aux(&mut page.canvas, x, baseline);
         }
@@ -705,7 +705,28 @@ impl Typesetter {
             .collect()
     }
 
-    fn lay_out_aux(&mut self, text: &str, size: f32) {
+    /// How wide a one-line label is, for the reader's own screens such as
+    /// the menu. `weight` is absolute, 400 being regular.
+    pub fn label_width(&mut self, text: &str, size: f32, weight: f32) -> f32 {
+        self.lay_out_aux(text, size, weight);
+        self.aux.width()
+    }
+
+    /// Draws a one-line label with its baseline's left end at (`x`,
+    /// `baseline`).
+    pub fn draw_label(
+        &mut self,
+        canvas: &mut Canvas,
+        text: &str,
+        (x, baseline): (f32, f32),
+        size: f32,
+        weight: f32,
+    ) {
+        self.lay_out_aux(text, size, weight);
+        self.draw_aux(canvas, x, baseline);
+    }
+
+    fn lay_out_aux(&mut self, text: &str, size: f32, weight: f32) {
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.fonts, text, 1.0, true);
@@ -715,9 +736,7 @@ impl Typesetter {
         builder.push_default(StyleProperty::FontSize(size));
         builder.push_default(StyleProperty::Locale(self.locale));
         builder.push_default(optical_size(size, self.settings.dpi));
-        builder.push_default(StyleProperty::FontWeight(FontWeight::new(
-            self.settings.weight_above(0.0),
-        )));
+        builder.push_default(StyleProperty::FontWeight(FontWeight::new(weight)));
         builder.build_into(&mut self.aux, text);
         self.aux.break_all_lines(None);
     }

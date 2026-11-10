@@ -2839,6 +2839,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "reader-app"
+version = "0.1.0"
+dependencies = [
+ "book-format",
+ "reader-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "reader-core"
 version = "0.1.0"
 dependencies = [
@@ -2859,8 +2870,8 @@ dependencies = [
  "book-convert",
  "book-format",
  "minifb",
+ "reader-app",
  "reader-core",
- "serde_json",
 ]
 
 [[package]]
