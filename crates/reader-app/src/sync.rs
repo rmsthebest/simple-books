@@ -5,6 +5,9 @@
 //! the job with `reader-sync`, takes the network down, and reports through
 //! a channel the session reads on each tick ([`Syncer::updates`]). One job
 //! runs at a time.
+//!
+//! Turning on SSH ([`Syncer::ssh_start`]) is a job too, one that leaves the
+//! network up until [`Syncer::ssh_stop`].
 
 use std::{
     collections::BTreeMap,
@@ -26,8 +29,20 @@ pub trait Network: Send + Sync {
     /// Brings the network up, waiting until it's usable. The message says
     /// why not, for the screen.
     fn up(&self) -> Result<(), String>;
-    /// Takes it down again once the job's done.
+    /// Takes it down again once the job's done. Each [`Network::up`] that
+    /// worked is matched by one of these, and the network stays up while
+    /// any job still needs it.
     fn down(&self);
+}
+
+/// A way in over the network, for working on the device: SSH on the Kobo.
+/// Anyone on the network may be able to log in while it's on, so it's
+/// turned off before sleeping.
+pub trait Ssh: Send + Sync {
+    /// Starts it, with the network up. Returns how to log in, for the
+    /// screen, or why it didn't start.
+    fn start(&self) -> Result<String, String>;
+    fn stop(&self);
 }
 
 /// A network that's always there, as on a desktop.
@@ -52,6 +67,8 @@ pub struct SyncSetup {
     /// What the website calls this reader.
     pub name: String,
     pub network: Arc<dyn Network>,
+    /// SSH, where the platform has it.
+    pub ssh: Option<Arc<dyn Ssh>>,
 }
 
 impl std::fmt::Debug for SyncSetup {
@@ -60,6 +77,7 @@ impl std::fmt::Debug for SyncSetup {
             .field("dir", &self.dir)
             .field("server", &self.server)
             .field("name", &self.name)
+            .field("ssh", &self.ssh.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -83,6 +101,10 @@ pub(crate) enum Update {
     /// The server no longer knows this reader: it was removed on the
     /// website. Its secret is forgotten.
     Unpaired,
+    /// SSH is on; this says how to log in.
+    SshOn(String),
+    /// SSH didn't start; this says why.
+    SshFailed(String),
     Done,
 }
 
@@ -92,6 +114,17 @@ pub(crate) enum Activity {
     Connecting,
     Pairing { code: Option<(String, String)> },
     Syncing(String),
+    StartingSsh,
+}
+
+/// Where SSH is, for the sync screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SshState {
+    Off {
+        problem: Option<String>,
+    },
+    /// How to log in.
+    On(String),
 }
 
 /// How the last job ended, kept across restarts.
@@ -184,8 +217,13 @@ pub(crate) struct Syncer {
     running: Option<Running>,
     pub activity: Option<Activity>,
     pub status: Status,
-    /// When the last job started, to sync again only now and then.
+    /// When the last pairing or sync started, to sync again only now and
+    /// then.
     pub started: Option<Instant>,
+    /// How to log in while SSH is on.
+    ssh_on: Option<String>,
+    /// Why SSH last didn't start.
+    ssh_problem: Option<String>,
 }
 
 impl std::fmt::Debug for Syncer {
@@ -207,6 +245,61 @@ impl Syncer {
             activity: None,
             status,
             started: None,
+            ssh_on: None,
+            ssh_problem: None,
+        }
+    }
+
+    /// Where SSH is, if the platform has it.
+    pub(crate) fn ssh(&self) -> Option<SshState> {
+        self.setup.ssh.as_ref()?;
+        Some(match &self.ssh_on {
+            Some(login) => SshState::On(login.clone()),
+            None => SshState::Off {
+                problem: self.ssh_problem.clone(),
+            },
+        })
+    }
+
+    /// How to log in, while SSH is on.
+    pub(crate) fn ssh_login(&self) -> Option<&str> {
+        self.ssh_on.as_deref()
+    }
+
+    /// Brings the network up and starts SSH, leaving both on.
+    pub(crate) fn ssh_start(&mut self) {
+        let Some(ssh) = self.setup.ssh.clone() else {
+            return;
+        };
+        if self.busy() || self.ssh_on.is_some() {
+            return;
+        }
+        self.ssh_problem = None;
+        self.activity = Some(Activity::StartingSsh);
+        self.spawn(move |send, stop, network| match network.up() {
+            Err(why) => send(Update::SshFailed(why)),
+            Ok(()) if stop.load(Ordering::Relaxed) => {
+                network.down();
+                send(Update::SshFailed("Stopped.".into()));
+            }
+            Ok(()) => match ssh.start() {
+                Ok(login) => send(Update::SshOn(login)),
+                Err(why) => {
+                    network.down();
+                    send(Update::SshFailed(why));
+                }
+            },
+        });
+    }
+
+    /// Stops SSH, and lets the network go down unless a job needs it.
+    /// Waits for both.
+    pub(crate) fn ssh_stop(&mut self) {
+        if self.ssh_on.take().is_some()
+            && let Some(ssh) = &self.setup.ssh
+        {
+            ssh.stop();
+            self.setup.network.down();
         }
     }
 
@@ -249,9 +342,12 @@ impl Syncer {
         let name = self.setup.name.clone();
         let paths = self.paths.clone();
         self.activity = Some(Activity::Connecting);
-        self.spawn(now, move |send, stop| {
-            let client = Client::new(&server);
-            pair(&client, &name, &paths, send, stop);
+        self.started = Some(now);
+        self.spawn(move |send, stop, network| {
+            online(network, send, || {
+                let client = Client::new(&server);
+                pair(&client, &name, &paths, send, stop);
+            });
         });
     }
 
@@ -266,16 +362,18 @@ impl Syncer {
         }
         let paths = self.paths.clone();
         self.activity = Some(Activity::Connecting);
-        self.spawn(now, move |send, stop| {
-            let client = Client::new(&server);
-            sync_once(&client, &paths, &local, send, stop);
+        self.started = Some(now);
+        self.spawn(move |send, stop, network| {
+            online(network, send, || {
+                let client = Client::new(&server);
+                sync_once(&client, &paths, &local, send, stop);
+            });
         });
     }
 
     fn spawn(
         &mut self,
-        now: Instant,
-        job: impl FnOnce(&dyn Fn(Update), &AtomicBool) + Send + 'static,
+        job: impl FnOnce(&dyn Fn(Update), &AtomicBool, &dyn Network) + Send + 'static,
     ) {
         let (sender, updates) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
@@ -286,17 +384,10 @@ impl Syncer {
                 let _ = sender.send(update);
             };
             send(Update::Connecting);
-            match network.up() {
-                Ok(()) => {
-                    job(&send, &thread_stop);
-                    network.down();
-                }
-                Err(why) => send(Update::Failed(why)),
-            }
+            job(&send, &thread_stop, network.as_ref());
             send(Update::Done);
         });
         self.running = Some(Running { updates, stop });
-        self.started = Some(now);
     }
 
     /// The thread's news since last asked. Notes what the screen should
@@ -339,6 +430,8 @@ impl Syncer {
                     self.activity = Some(Activity::Syncing(progress_text(progress)));
                 }
                 Update::Unpaired => self.status.user = None,
+                Update::SshOn(login) => self.ssh_on = Some(login.clone()),
+                Update::SshFailed(why) => self.ssh_problem = Some(why.clone()),
                 Update::Synced(_) | Update::Failed(_) => {}
                 Update::Done => {
                     self.running = None;
@@ -370,6 +463,17 @@ fn failure(error: &Error) -> String {
         Error::NotFound => "The server didn't have something it listed.".to_owned(),
         Error::Damaged(_) => "A download was damaged. It'll be tried again.".to_owned(),
         Error::Io(error) => format!("Couldn't save: {error}"),
+    }
+}
+
+/// Runs `job` with the network up, or says why it couldn't come up.
+fn online(network: &dyn Network, send: &dyn Fn(Update), job: impl FnOnce()) {
+    match network.up() {
+        Ok(()) => {
+            job();
+            network.down();
+        }
+        Err(why) => send(Update::Failed(why)),
     }
 }
 

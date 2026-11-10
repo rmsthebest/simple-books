@@ -34,19 +34,12 @@ wait_for_exit() {
     done
 }
 
-# The reader doesn't use the network, and Nickel doesn't like finding Wi-Fi
-# up when it starts. Safe to run when it's already off.
+# The reader turns Wi-Fi on only while it syncs, and Nickel doesn't like
+# finding Wi-Fi up when it starts. Safe to run when it's already off.
 wifi_off() {
     if [ -n "${WIFI_MODULE}" ] && grep -q "^${WIFI_MODULE} " /proc/modules; then
         killall -q -TERM restore-wifi-async.sh enable-wifi.sh obtain-ip.sh
-        dhcpcd -d -k "${INTERFACE}" >/dev/null 2>&1
-        killall -q -TERM udhcpc default.script
-        wpa_cli -i "${INTERFACE}" terminate >/dev/null 2>&1
-        ifconfig "${INTERFACE}" down
-        # The MediaTek driver stays loaded; Wi-Fi is powered off instead.
-        if [ "${WIFI_MODULE}" = "wlan_drv_gen4m" ]; then
-            echo 0 >/dev/wmtWifi
-        fi
+        "${APP_DIR}/wifi.sh" down
     fi
 }
 
@@ -87,9 +80,9 @@ restart_nickel() {
 VIA_NICKEL=false
 if pkill -0 nickel; then
     VIA_NICKEL=true
-    # What restarting Nickel and turning off Wi-Fi need from its setup.
+    # What restarting Nickel and Wi-Fi need from its setup.
     # shellcheck disable=SC2046
-    export $(grep -s -E -e '^(DBUS_SESSION_BUS_ADDRESS|NICKEL_HOME|WIFI_MODULE|LANG|INTERFACE)=' \
+    export $(grep -s -E -e '^(DBUS_SESSION_BUS_ADDRESS|NICKEL_HOME|WIFI_MODULE|LANG|INTERFACE|PLATFORM)=' \
         "/proc/$(pidof -s nickel)/environ")
     if [ -e /sys/devices/platform/bt/rfkill/rfkill0/state ]; then
         echo 0 >/sys/devices/platform/bt/rfkill/rfkill0/state
@@ -102,7 +95,7 @@ if pkill -0 nickel; then
     wait_for_exit nickel
     rm -f /tmp/nickel-hardware-status /run/kobo/udev/fifo
     # Wi-Fi is going off, so an SSH server started from Nickelite has no
-    # more use.
+    # more use. The reader can start its own.
     "${APP_DIR}/ssh.sh" stop
     wifi_off
 fi
@@ -110,6 +103,9 @@ fi
 "${APP_DIR}/reader-kobo" "$@" </dev/null >/dev/null 2>&1
 status=$?
 say "reader-kobo exited with ${status}"
+# SSH, if the reader left it on, isn't left open for when Nickel turns
+# Wi-Fi on again.
+"${APP_DIR}/ssh.sh" stop
 # Nickel's screen settings, if the reader didn't get to restore them.
 "${APP_DIR}/reader-kobo" --restore-screen >>"${LOG}" 2>&1
 

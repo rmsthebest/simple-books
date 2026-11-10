@@ -1,10 +1,10 @@
 //! The sync screen, from settings: pairing with the website, syncing now,
-//! and how the last sync went.
+//! how the last sync went, and SSH where the platform has it.
 
 use reader_core::{Canvas, Typesetter};
 
 use crate::{
-    sync::Activity,
+    sync::{Activity, SshState},
     ui::{self, BUTTON_HEIGHT, HEADER, LABEL_SIZE, MARGIN, Rect},
 };
 
@@ -30,6 +30,8 @@ pub(crate) enum Action {
     Stop,
     /// The first tap asks to tap again.
     Unpair,
+    /// Turns SSH on or off.
+    Ssh,
     Back,
 }
 
@@ -39,6 +41,8 @@ pub(crate) struct Layout {
     pub view: View,
     /// Unpair was tapped once: another tap unpairs.
     pub confirming: bool,
+    /// Where SSH is, if the platform has it.
+    pub ssh: Option<SshState>,
     buttons: Vec<(Rect, Action, &'static str)>,
 }
 
@@ -47,7 +51,13 @@ const LINE: f32 = 60.0;
 const CODE_SIZE: f32 = 120.0;
 
 impl Layout {
-    pub(crate) fn new(width: u32, height: u32, view: View, confirming: bool) -> Self {
+    pub(crate) fn new(
+        width: u32,
+        height: u32,
+        view: View,
+        confirming: bool,
+        ssh: Option<SshState>,
+    ) -> Self {
         let (width, height) = (width as f32, height as f32);
         let content = width - 2.0 * MARGIN;
         let mut row: Vec<(Action, &'static str, f32)> = match &view {
@@ -71,14 +81,26 @@ impl Layout {
         let shares: Vec<f32> = row.iter().map(|(_, _, share)| *share).collect();
         let top = height - BUTTON_HEIGHT - 24.0;
         let rects = ui::row(MARGIN, top, content, BUTTON_HEIGHT, &shares);
-        let buttons = rects
+        let mut buttons: Vec<_> = rects
             .into_iter()
             .zip(row)
             .map(|(rect, (action, label, _))| (rect, action, label))
             .collect();
+        // Off while another job runs, which SSH would have to wait for.
+        let ssh_button = match &ssh {
+            Some(SshState::On(_)) => true,
+            Some(SshState::Off { .. }) => !matches!(view, View::Busy(_)),
+            None => false,
+        };
+        if ssh_button {
+            let top = top - BUTTON_HEIGHT - 24.0;
+            let rect = ui::row(MARGIN, top, content, BUTTON_HEIGHT, &[1.0])[0];
+            buttons.push((rect, Action::Ssh, "SSH"));
+        }
         Self {
             view,
             confirming,
+            ssh,
             buttons,
         }
     }
@@ -101,72 +123,8 @@ impl Layout {
     ) {
         canvas.clear();
         ui::header(canvas, ui, "Sync", battery);
-        let room = canvas.width() as f32 - 2.0 * MARGIN;
         let mut y = TEXT_TOP;
-        let say = |canvas: &mut Canvas, ui: &mut Typesetter, text: &str, y: &mut f32| {
-            for line in ui::wrap(ui, text, LABEL_SIZE, 400.0, room, 4) {
-                ui.draw_label(canvas, &line, (MARGIN, *y), LABEL_SIZE, 400.0);
-                *y += LINE;
-            }
-            *y += LINE / 2.0;
-        };
-        match &self.view {
-            View::NoServer => say(
-                canvas,
-                ui,
-                "This reader doesn't know which server to sync with. Connect it to your server \
-                 from the website's Kobo page first, or put the server's address in server.txt \
-                 in the reader's folder.",
-                &mut y,
-            ),
-            View::Unpaired { server } => {
-                say(canvas, ui, &format!("Server: {}", host(server)), &mut y);
-                say(
-                    canvas,
-                    ui,
-                    "Pair this reader with your library to get your books and keep your place \
-                     in them. Pair shows a code to type on the website.",
-                    &mut y,
-                );
-            }
-            View::Paired { server, user } => {
-                say(canvas, ui, &format!("Server: {}", host(server)), &mut y);
-                let whose = match user {
-                    Some(user) => format!("Paired with {user}'s library."),
-                    None => "Paired.".to_owned(),
-                };
-                say(canvas, ui, &whose, &mut y);
-                if self.confirming {
-                    say(
-                        canvas,
-                        ui,
-                        "Unpairing stops syncing. The books stay on this reader.",
-                        &mut y,
-                    );
-                }
-            }
-            View::Busy(Activity::Connecting) => say(canvas, ui, "Connecting…", &mut y),
-            View::Busy(Activity::Pairing { code: None }) => {
-                say(canvas, ui, "Asking for a code…", &mut y);
-            }
-            View::Busy(Activity::Pairing {
-                code: Some((code, url)),
-            }) => {
-                say(
-                    canvas,
-                    ui,
-                    &format!("On {}, sign in and type this code:", page(url)),
-                    &mut y,
-                );
-                let code_width = ui.label_width(code, CODE_SIZE, 700.0);
-                let x = (canvas.width() as f32 - code_width) / 2.0;
-                y += CODE_SIZE * 0.8;
-                ui.draw_label(canvas, code, (x, y), CODE_SIZE, 700.0);
-                y += CODE_SIZE * 0.8;
-                say(canvas, ui, "Waiting for it…", &mut y);
-            }
-            View::Busy(Activity::Syncing(what)) => say(canvas, ui, what, &mut y),
-        }
+        self.draw_view(canvas, ui, &mut y);
         if let Some(last) = last
             && !matches!(
                 self.view,
@@ -175,11 +133,106 @@ impl Layout {
         {
             say(canvas, ui, last, &mut y);
         }
+        match &self.ssh {
+            Some(SshState::On(login)) => say(
+                canvas,
+                ui,
+                &format!(
+                    "SSH is on: {login}. Anyone on this Wi-Fi can log in, so turn it off when \
+                     you're done. Sleeping turns it off too."
+                ),
+                &mut y,
+            ),
+            Some(SshState::Off {
+                problem: Some(problem),
+            }) => say(canvas, ui, &format!("SSH didn't start: {problem}"), &mut y),
+            _ => {}
+        }
         for (rect, action, label) in &self.buttons {
-            let on = *action == Action::Unpair && self.confirming;
+            let on = match action {
+                Action::Unpair => self.confirming,
+                Action::Ssh => matches!(self.ssh, Some(SshState::On(_))),
+                _ => false,
+            };
             ui::toggle(canvas, ui, *rect, label, on);
         }
     }
+}
+
+impl Layout {
+    /// What the view says, from `y` down.
+    fn draw_view(&self, canvas: &mut Canvas, ui: &mut Typesetter, y: &mut f32) {
+        match &self.view {
+            View::NoServer => say(
+                canvas,
+                ui,
+                "This reader doesn't know which server to sync with. Connect it to your server \
+                 from the website's Kobo page first, or put the server's address in server.txt \
+                 in the reader's folder.",
+                y,
+            ),
+            View::Unpaired { server } => {
+                say(canvas, ui, &format!("Server: {}", host(server)), y);
+                say(
+                    canvas,
+                    ui,
+                    "Pair this reader with your library to get your books and keep your place \
+                     in them. Pair shows a code to type on the website.",
+                    y,
+                );
+            }
+            View::Paired { server, user } => {
+                say(canvas, ui, &format!("Server: {}", host(server)), y);
+                let whose = match user {
+                    Some(user) => format!("Paired with {user}'s library."),
+                    None => "Paired.".to_owned(),
+                };
+                say(canvas, ui, &whose, y);
+                if self.confirming {
+                    say(
+                        canvas,
+                        ui,
+                        "Unpairing stops syncing. The books stay on this reader.",
+                        y,
+                    );
+                }
+            }
+            View::Busy(Activity::Connecting) => say(canvas, ui, "Connecting…", y),
+            View::Busy(Activity::Pairing { code: None }) => {
+                say(canvas, ui, "Asking for a code…", y);
+            }
+            View::Busy(Activity::Pairing {
+                code: Some((code, url)),
+            }) => {
+                say(
+                    canvas,
+                    ui,
+                    &format!("On {}, sign in and type this code:", page(url)),
+                    y,
+                );
+                let code_width = ui.label_width(code, CODE_SIZE, 700.0);
+                let x = (canvas.width() as f32 - code_width) / 2.0;
+                *y += CODE_SIZE * 0.8;
+                ui.draw_label(canvas, code, (x, *y), CODE_SIZE, 700.0);
+                *y += CODE_SIZE * 0.8;
+                say(canvas, ui, "Waiting for it…", y);
+            }
+            View::Busy(Activity::Syncing(what)) => say(canvas, ui, what, y),
+            View::Busy(Activity::StartingSsh) => {
+                say(canvas, ui, "Turning on Wi-Fi and SSH…", y);
+            }
+        }
+    }
+}
+
+/// Draws `text` at `y`, wrapped, and moves `y` below it.
+fn say(canvas: &mut Canvas, ui: &mut Typesetter, text: &str, y: &mut f32) {
+    let room = canvas.width() as f32 - 2.0 * MARGIN;
+    for line in ui::wrap(ui, text, LABEL_SIZE, 400.0, room, 4) {
+        ui.draw_label(canvas, &line, (MARGIN, *y), LABEL_SIZE, 400.0);
+        *y += LINE;
+    }
+    *y += LINE / 2.0;
 }
 
 /// `https://books.example.com/` as `books.example.com`.
@@ -228,8 +281,23 @@ mod tests {
             },
             View::Busy(Activity::Connecting),
         ];
-        for view in views {
-            let layout = Layout::new(1072, 1448, view.clone(), false);
+        let ssh = [
+            None,
+            Some(SshState::Off { problem: None }),
+            Some(SshState::On("ssh root@k".into())),
+        ];
+        for (view, ssh) in views
+            .iter()
+            .flat_map(|view| ssh.iter().map(move |ssh| (view.clone(), ssh.clone())))
+        {
+            let layout = Layout::new(1072, 1448, view.clone(), false, ssh.clone());
+            let has_ssh = layout.buttons.iter().any(|(_, a, _)| *a == Action::Ssh);
+            let wanted = match (&ssh, &view) {
+                (Some(SshState::On(_)), _) => true,
+                (Some(_), View::Busy(_)) | (None, _) => false,
+                (Some(_), _) => true,
+            };
+            assert_eq!(has_ssh, wanted, "{view:?} {ssh:?}");
             let (rect, ..) = layout
                 .buttons
                 .iter()

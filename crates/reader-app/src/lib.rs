@@ -61,7 +61,7 @@ pub use library::{Entry, Library};
 use place::SavedPlace;
 use reader_sync::{Report, Spot, Status};
 pub use shelf::Sort;
-pub use sync::{AlwaysOnline, Network, SyncSetup};
+pub use sync::{AlwaysOnline, Network, Ssh, SyncSetup};
 
 /// A full refresh every this many turns clears ghosting.
 pub const FULL_EVERY: u32 = 6;
@@ -414,6 +414,14 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         }
     }
 
+    /// How to log in, while SSH is on.
+    pub fn ssh_login(&self) -> Option<String> {
+        match self.syncer.as_ref()?.ssh()? {
+            sync::SshState::On(login) => Some(login),
+            sync::SshState::Off { .. } => None,
+        }
+    }
+
     /// How the last sync went, as the sync screen says it.
     pub fn last_sync(&self) -> Option<&str> {
         let last = self.syncer.as_ref()?.status.last.as_ref()?;
@@ -508,7 +516,9 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 sync::Update::Connecting
                 | sync::Update::Progress(_)
                 | sync::Update::Code { .. }
-                | sync::Update::Paired { .. } => {}
+                | sync::Update::Paired { .. }
+                | sync::Update::SshOn(_)
+                | sync::Update::SshFailed(_) => {}
             }
         }
         if ended && let Some(syncer) = &self.syncer {
@@ -626,7 +636,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             _ => false,
         };
         let settings = Settings::default();
-        let layout = sync_page::Layout::new(settings.width, settings.height, view, confirming);
+        let ssh = self.syncer.as_ref().and_then(sync::Syncer::ssh);
+        let layout = sync_page::Layout::new(settings.width, settings.height, view, confirming, ssh);
         let battery = battery_text(device);
         let clock = device.clock();
         let last = self
@@ -670,6 +681,15 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 }
             }
             Some(sync_page::Action::Unpair) => layout.confirming = true,
+            Some(sync_page::Action::Ssh) => {
+                if let Some(syncer) = self.syncer.as_mut() {
+                    if syncer.ssh_login().is_some() {
+                        syncer.ssh_stop();
+                    } else {
+                        syncer.ssh_start();
+                    }
+                }
+            }
             None => return,
         }
         self.show_sync(device, Refresh::Partial, now);
@@ -1179,6 +1199,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             book.collect(device);
         }
         self.sync_news(device, now);
+        if matches!(self.mode, Mode::Asleep { .. }) {
+            // In case SSH came on after the sleep screen went up.
+            self.ssh_off();
+        }
         let syncing = self.syncing();
         match &mut self.mode {
             Mode::Asleep { suspend_at, .. } => {
@@ -1245,11 +1269,19 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             500.0,
         );
         device.show(&self.screen, Refresh::Full);
+        self.ssh_off();
         self.mode = Mode::Asleep {
             suspend_at: now + SUSPEND_DELAY,
             back,
         };
         Ok(())
+    }
+
+    /// Turns SSH off, if it's on, as before sleeping.
+    fn ssh_off(&mut self) {
+        if let Some(syncer) = self.syncer.as_mut() {
+            syncer.ssh_stop();
+        }
     }
 
     fn wake(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {

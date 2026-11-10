@@ -21,5 +21,6 @@ thiserror = "2"
 
 [dev-dependencies]
 sync-proto = { path = "../sync-proto" }
+tempfile = "3"
 # To make cover images for tests.
 image = { version = "0.25.10", default-features = false, features = ["png"] }

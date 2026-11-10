@@ -26,11 +26,16 @@
 //!   are only logged for now, since what they mean isn't confirmed.
 //! - **Light, battery and sleep:** sysfs, as recorded in
 //!   `docs/clara-bw-hardware.md`.
+//! - **Sync:** with the server Nickel syncs with, or the one in `server.txt`
+//!   in the app folder. Wi-Fi is on only while a sync, a pairing or SSH
+//!   needs it, through `wifi.sh` (see [`online`]). It syncs at start, on
+//!   Sync now, and on waking every half hour.
 #![deny(unsafe_code)]
 #![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
 mod device;
 mod input;
+mod online;
 mod sys;
 
 use std::{
@@ -42,7 +47,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use reader_app::{Event, Flow, Folder, Session};
+use reader_app::{Event, Flow, Folder, Session, SyncSetup};
 
 use crate::{
     device::Kobo,
@@ -144,6 +149,14 @@ fn run(dir: &Path) -> io::Result<()> {
         started.elapsed(),
         session.library().books().len()
     );
+    let setup = SyncSetup {
+        dir: dir.to_owned(),
+        server: online::server(dir),
+        name: "Kobo Clara BW".to_owned(),
+        network: Arc::new(online::Wifi::new(dir)),
+        ssh: Some(Arc::new(online::KoboSsh::new(dir))),
+    };
+    session.enable_sync(setup, &mut kobo, Instant::now());
 
     let mut taps = Touch::default();
     // When the power button went down, if it's down. A release with no

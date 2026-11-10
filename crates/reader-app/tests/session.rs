@@ -4,7 +4,10 @@
 use std::{
     collections::HashMap,
     io::{self, Cursor},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering::SeqCst},
+    },
     time::{Duration, Instant},
 };
 
@@ -12,8 +15,8 @@ use book_format::{
     Align, Block, BlockKind, BookReader, Chapter, FormatError, Limits, Position, Span,
 };
 use reader_app::{
-    AUTO_SLEEP, Battery, BookFile, Books, Device, Event, FULL_EVERY, Flow, Light, Refresh,
-    SLEEP_RETRY, SUSPEND_DELAY, Session, Sort, Turn,
+    AUTO_SLEEP, Battery, BookFile, Books, Device, Event, FULL_EVERY, Flow, Light, Network, Refresh,
+    SLEEP_RETRY, SUSPEND_DELAY, Session, Sort, Ssh, SyncSetup, Turn,
 };
 use reader_core::Reader;
 
@@ -932,4 +935,131 @@ fn asleep_in_settings_it_wakes_there() {
     assert_eq!(run.device.suspended, 1);
     assert!(run.session.in_settings());
     assert_eq!(run.device.last, screen);
+}
+
+/// Counts what's asked of the network and SSH.
+#[derive(Default)]
+struct Online {
+    ups: AtomicU32,
+    downs: AtomicU32,
+    ssh_starts: AtomicU32,
+    ssh_stops: AtomicU32,
+    /// Wi-Fi can't connect.
+    unreachable: bool,
+}
+
+impl Online {
+    fn counts(&self) -> [u32; 4] {
+        [&self.ups, &self.downs, &self.ssh_starts, &self.ssh_stops].map(|n| n.load(SeqCst))
+    }
+}
+
+/// Both traits on one value, shared with the test.
+struct Shared(Arc<Online>);
+
+impl Network for Shared {
+    fn up(&self) -> Result<(), String> {
+        if self.0.unreachable {
+            return Err("No Wi-Fi.".to_owned());
+        }
+        self.0.ups.fetch_add(1, SeqCst);
+        Ok(())
+    }
+    fn down(&self) {
+        self.0.downs.fetch_add(1, SeqCst);
+    }
+}
+
+impl Ssh for Shared {
+    fn start(&self) -> Result<String, String> {
+        self.0.ssh_starts.fetch_add(1, SeqCst);
+        Ok("ssh root@kobo".to_owned())
+    }
+    fn stop(&self) {
+        self.0.ssh_stops.fetch_add(1, SeqCst);
+    }
+}
+
+const SETTINGS_SYNC: (f32, f32) = (296.0, 1376.0);
+const SYNC_SSH: (f32, f32) = (536.0, 1256.0);
+
+/// On the sync screen, with no server known and SSH from `online`.
+fn sync_screen(online: &Arc<Online>, dir: &std::path::Path) -> Run {
+    let mut run = Run::at_home(Fake {
+        can_suspend: true,
+        ..Fake::default()
+    });
+    let setup = SyncSetup {
+        dir: dir.to_owned(),
+        server: None,
+        name: "Test".to_owned(),
+        network: Arc::new(Shared(Arc::clone(online))),
+        ssh: Some(Arc::new(Shared(Arc::clone(online)))),
+    };
+    run.session.enable_sync(setup, &mut run.device, run.now);
+    run.tap(HOME_SETTINGS.0, HOME_SETTINGS.1);
+    run.tap(SETTINGS_SYNC.0, SETTINGS_SYNC.1);
+    assert!(run.session.in_sync());
+    run
+}
+
+impl Run {
+    /// Ticks until the SSH job's done.
+    fn until_idle(&mut self) {
+        let give_up = Instant::now() + Duration::from_secs(5);
+        while self.session.syncing() {
+            assert!(Instant::now() < give_up, "the job never ended");
+            std::thread::sleep(Duration::from_millis(5));
+            self.tick_after(Duration::from_millis(5));
+        }
+    }
+}
+
+#[test]
+fn ssh_keeps_the_network_up_until_its_turned_off_or_it_sleeps() {
+    let online = Arc::new(Online::default());
+    let dir = tempfile::tempdir().unwrap();
+    let mut run = sync_screen(&online, dir.path());
+
+    run.tap(SYNC_SSH.0, SYNC_SSH.1);
+    run.until_idle();
+    assert_eq!(run.session.ssh_login().as_deref(), Some("ssh root@kobo"));
+    assert_eq!(online.counts(), [1, 0, 1, 0], "up, and left up");
+
+    run.tap(SYNC_SSH.0, SYNC_SSH.1);
+    assert_eq!(run.session.ssh_login(), None);
+    assert_eq!(online.counts(), [1, 1, 1, 1], "off, and down");
+
+    // On again, then to sleep: it goes off before suspending.
+    run.tap(SYNC_SSH.0, SYNC_SSH.1);
+    run.until_idle();
+    assert!(run.session.ssh_login().is_some());
+    run.send(Event::Power);
+    assert_eq!(run.session.ssh_login(), None);
+    assert_eq!(online.counts(), [2, 2, 2, 2]);
+    run.tick_after(SUSPEND_DELAY);
+    assert_eq!(run.device.suspended, 1);
+}
+
+#[test]
+fn ssh_without_wifi_says_why() {
+    let online = Arc::new(Online {
+        unreachable: true,
+        ..Online::default()
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let mut run = sync_screen(&online, dir.path());
+    let before = run.device.last;
+    run.tap(SYNC_SSH.0, SYNC_SSH.1);
+    run.until_idle();
+    assert_eq!(run.session.ssh_login(), None);
+    assert_eq!(
+        online.counts(),
+        [0, 0, 0, 0],
+        "never started, nothing to undo"
+    );
+    assert_ne!(run.device.last, before, "it says so");
+    // And it can be tried again.
+    run.tap(SYNC_SSH.0, SYNC_SSH.1);
+    run.until_idle();
 }

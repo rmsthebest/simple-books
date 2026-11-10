@@ -20,7 +20,7 @@ use std::{
 };
 
 use reader_app::{
-    AlwaysOnline, Battery, Books, Device, Event, Folder, Light, Refresh, Session, SyncSetup,
+    AlwaysOnline, Battery, Books, Device, Event, Folder, Light, Refresh, Session, Ssh, SyncSetup,
 };
 use reader_core::Canvas;
 
@@ -155,6 +155,7 @@ fn sync_screens(run: &mut Run) {
         server: Some(stand_in_server()),
         name: "Kobo Clara BW".to_owned(),
         network: Arc::new(AlwaysOnline),
+        ssh: Some(Arc::new(StandInSsh)),
     };
     run.session.enable_sync(setup, &mut run.device, run.now);
     run.tap("sync-unpaired", 296.0, 1376.0);
@@ -174,7 +175,23 @@ fn sync_screens(run: &mut Run) {
     while run.session.syncing() {
         wait_and_tick(run, "sync-synced");
     }
+    // SSH on, then off again.
+    run.tap("sync-ssh-starting", 536.0, 1256.0);
+    while run.session.ssh_login().is_none() {
+        wait_and_tick(run, "sync-ssh-on");
+    }
+    run.tap("sync-ssh-off", 536.0, 1256.0);
     run.tap("settings-back", 776.0, 1376.0);
+}
+
+struct StandInSsh;
+
+impl Ssh for StandInSsh {
+    fn start(&self) -> Result<String, String> {
+        Ok("ssh -p 2222 root@192.168.1.50".to_owned())
+    }
+
+    fn stop(&self) {}
 }
 
 fn wait_and_tick(run: &mut Run, name: &'static str) {

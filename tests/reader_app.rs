@@ -175,6 +175,7 @@ fn start(dir: &Path, url: &str, device: &mut Disk) -> Session<fs::File> {
             server: Some(url.to_owned()),
             name: "Kobo Clara BW".to_owned(),
             network: Arc::new(AlwaysOnline),
+            ssh: None,
         },
         device,
         Instant::now(),

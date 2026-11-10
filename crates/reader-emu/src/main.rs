@@ -143,6 +143,7 @@ fn main() {
             server: Some(server),
             name: "Emulator".to_owned(),
             network: Arc::new(AlwaysOnline),
+            ssh: None,
         };
         session.enable_sync(setup, &mut panel, Instant::now());
     }
