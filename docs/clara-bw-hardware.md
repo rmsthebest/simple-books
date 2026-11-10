@@ -161,6 +161,11 @@ coordinates.
   4. `echo mem > /sys/power/state`;
   5. after waking, `echo 0 > /sys/power/state-extended`.
   - If `mem` fails, write `0` to `state-extended` as well. That's what Nickel does.
+  - **Wait about 15 s after the last screen update** before step 1, as KOReader does.
+    The display driver keeps the panel powered for a while after a refresh. Until that
+    ends, `mem` fails with `EPERM`, and the kernel log says `hwtcon_fb_suspend xon off
+    timer pending` and `Device 14000000.hwtcon failed to suspend`. An attempt about 2 s
+    after the sleep screen failed this way.
   - `standby` isn't available.
   - **Never suspend while plugged in.** On MediaTek this hangs the kernel. Check
     `ac/online` and retry after unplugging.

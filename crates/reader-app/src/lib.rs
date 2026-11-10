@@ -47,8 +47,13 @@ pub const AUTO_SLEEP: Duration = Duration::from_mins(10);
 /// The power button is ignored this long after waking, since the press that
 /// woke the device can arrive again once it's awake.
 const WAKE_GRACE: Duration = Duration::from_secs(2);
+/// How long the sleep screen stays up before the first try at suspending.
+/// The Clara BW's display driver refuses to suspend while the panel is
+/// still powered from the last refresh; KOReader waits 15 s for the same
+/// reason.
+pub const SUSPEND_DELAY: Duration = Duration::from_secs(15);
 /// While it can't sleep, such as while charging, it tries again this often.
-const SLEEP_RETRY: Duration = Duration::from_secs(5);
+pub const SLEEP_RETRY: Duration = Duration::from_secs(5);
 /// While the book is paginated in the background, it checks this often.
 const BACKGROUND_CHECK: Duration = Duration::from_secs(1);
 /// The place is saved every this many turns, besides on sleep and exit.
@@ -199,8 +204,12 @@ fn pages_file(key: u64) -> String {
 enum Mode {
     Reading,
     Menu(menu::Layout),
-    /// On the sleep screen, but not suspended: it couldn't sleep.
-    Asleep,
+    /// On the sleep screen, waiting to suspend, or awake again after a
+    /// failed try.
+    Asleep {
+        /// When to try to suspend next.
+        suspend_at: Instant,
+    },
 }
 
 /// The rest of the book being paginated on another thread.
@@ -232,6 +241,11 @@ pub struct Session<R> {
     last_touch: Instant,
     woke: Option<Instant>,
     background: Option<Background>,
+    /// Where the reader was when the layout was first changed since the
+    /// last turn. Each change finds the page from here, so stepping a
+    /// setting up and back down returns to the same page rather than
+    /// creeping back a page at a time.
+    anchor: Option<Position>,
 }
 
 impl<R> std::fmt::Debug for Session<R> {
@@ -282,6 +296,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             last_touch: now,
             woke: None,
             background,
+            anchor: None,
         };
         session.show_page(device, Refresh::Full, now)?;
         Ok(session)
@@ -299,7 +314,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     /// When to send [`Event::Tick`] if nothing else happens first.
     pub fn deadline(&self, now: Instant) -> Instant {
         let mut deadline = match self.mode {
-            Mode::Asleep => now + SLEEP_RETRY,
+            Mode::Asleep { suspend_at } => suspend_at,
             Mode::Reading | Mode::Menu(_) => self.last_touch + AUTO_SLEEP,
         };
         if self.background.is_some() {
@@ -318,7 +333,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             self.last_touch = now;
         }
         let in_menu = matches!(self.mode, Mode::Menu(_));
-        let asleep = matches!(self.mode, Mode::Asleep);
+        let asleep = matches!(self.mode, Mode::Asleep { .. });
         match event {
             Event::Exit => {
                 self.save(device);
@@ -419,6 +434,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
 
     /// Shows the page after a turn or a jump.
     fn moved(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
+        self.anchor = None;
         self.turns += 1;
         let refresh = if self.turns.is_multiple_of(FULL_EVERY) {
             Refresh::Full
@@ -457,9 +473,15 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             self.background = None;
         }
         match self.mode {
-            Mode::Asleep => {
-                if !device.battery().is_some_and(|b| b.charging) && device.suspend() {
-                    self.wake(device, Instant::now())?;
+            Mode::Asleep { suspend_at } => {
+                if now >= suspend_at {
+                    if !device.battery().is_some_and(|b| b.charging) && device.suspend() {
+                        self.wake(device, Instant::now().max(now))?;
+                    } else {
+                        self.mode = Mode::Asleep {
+                            suspend_at: now + SLEEP_RETRY,
+                        };
+                    }
                 }
             }
             Mode::Reading | Mode::Menu(_) => {
@@ -494,10 +516,9 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             500.0,
         );
         device.show(&self.screen, Refresh::Full);
-        self.mode = Mode::Asleep;
-        if device.suspend() {
-            self.wake(device, Instant::now().max(now))?;
-        }
+        self.mode = Mode::Asleep {
+            suspend_at: now + SUSPEND_DELAY,
+        };
         Ok(())
     }
 
@@ -622,11 +643,15 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     /// Opens the book again with changed preferences, at the same place.
     fn reopen(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
         save_json(device, PREFERENCES, &self.preferences);
-        let at = self.reader.position().unwrap_or(Position {
-            chapter: 0,
-            block: 0,
-            offset: 0,
-        });
+        let at = self
+            .anchor
+            .or_else(|| self.reader.position())
+            .unwrap_or(Position {
+                chapter: 0,
+                block: 0,
+                offset: 0,
+            });
+        self.anchor = Some(at);
         self.background = None;
         let settings = self.preferences.settings();
         let (reader, background) = open_reader(&self.open, self.book_key, &settings, at, device)?;

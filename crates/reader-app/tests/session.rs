@@ -10,7 +10,8 @@ use std::{
 
 use book_format::{Align, Block, BlockKind, BookReader, Chapter, Limits, Position, Span};
 use reader_app::{
-    AUTO_SLEEP, Battery, Device, Event, FULL_EVERY, Flow, Light, Opener, Refresh, Session, Turn,
+    AUTO_SLEEP, Battery, Device, Event, FULL_EVERY, Flow, Light, Opener, Refresh, SLEEP_RETRY,
+    SUSPEND_DELAY, Session, Turn,
 };
 
 const WORDS: &[&str] = &[
@@ -142,6 +143,14 @@ impl Run {
         self.send(Event::Tap { x, y })
     }
 
+    /// Lets `wait` pass with nothing happening, then sends the tick.
+    fn tick_after(&mut self, wait: Duration) {
+        self.now += wait;
+        self.session
+            .handle(Event::Tick, self.now, &mut self.device)
+            .unwrap();
+    }
+
     fn page(&self) -> Option<reader_core::PageRef> {
         self.session.reader().current()
     }
@@ -152,6 +161,12 @@ const FORWARD: (f32, f32) = (800.0, 900.0);
 const BACK: (f32, f32) = (100.0, 900.0);
 /// The top band, which opens the menu.
 const MENU: (f32, f32) = (536.0, 60.0);
+/// Darkness's − and + buttons, on the fifth row.
+const DARKER: (f32, f32) = (1072.0 - 64.0 - 52.0, 4.0 * 120.0 + 60.0);
+const LIGHTER: (f32, f32) = (1072.0 - 64.0 - 104.0 - 260.0 + 52.0, 4.0 * 120.0 + 60.0);
+/// Text size's − and +, on the fourth row.
+const BIGGER: (f32, f32) = (1072.0 - 64.0 - 52.0, 3.0 * 120.0 + 60.0);
+const SMALLER: (f32, f32) = (1072.0 - 64.0 - 104.0 - 260.0 + 52.0, 3.0 * 120.0 + 60.0);
 
 #[test]
 fn it_starts_with_a_full_refresh_and_leaves_the_light_alone() {
@@ -274,6 +289,11 @@ fn the_power_button_sleeps_and_wakes_to_the_page() {
     run.tap(FORWARD.0, FORWARD.1);
     let page_screen = run.device.last;
     run.send(Event::Power);
+    // The sleep screen is up, and it waits for the panel before suspending.
+    assert_ne!(run.device.last, page_screen);
+    assert_eq!(run.device.suspended, 0);
+    assert!(run.session.deadline(run.now) <= run.now + SUSPEND_DELAY);
+    run.tick_after(SUSPEND_DELAY);
     assert_eq!(run.device.suspended, 1);
     // Back on the page after waking, with a full refresh.
     assert_eq!(run.device.shown.last(), Some(&Refresh::Full));
@@ -302,7 +322,7 @@ fn while_charging_it_stays_on_the_sleep_screen_until_unplugged() {
     assert_eq!(run.device.suspended, 0);
     assert_ne!(run.device.last, page_screen, "the sleep screen is up");
     // Still plugged in: no sleep.
-    run.send(Event::Tick);
+    run.tick_after(SUSPEND_DELAY);
     assert_eq!(run.device.suspended, 0);
     // Unplugged: it sleeps on the next try.
     run.device.battery = Some(Battery {
@@ -310,7 +330,7 @@ fn while_charging_it_stays_on_the_sleep_screen_until_unplugged() {
         charging: false,
     });
     run.device.can_suspend = true;
-    run.send(Event::Tick);
+    run.tick_after(SLEEP_RETRY);
     assert_eq!(run.device.suspended, 1);
     assert_eq!(run.device.last, page_screen);
 }
@@ -331,11 +351,64 @@ fn a_tap_wakes_it_from_the_sleep_screen() {
 fn it_sleeps_after_a_while_without_a_touch() {
     let mut run = Run::new();
     assert!(run.session.deadline(run.now) <= run.now + AUTO_SLEEP);
-    run.now += AUTO_SLEEP;
-    run.session
-        .handle(Event::Tick, run.now, &mut run.device)
-        .unwrap();
+    run.tick_after(AUTO_SLEEP);
+    run.tick_after(SUSPEND_DELAY);
     assert_eq!(run.device.suspended, 1);
+}
+
+#[test]
+fn a_refused_suspend_is_tried_again() {
+    let mut run = Run::new();
+    run.device.can_suspend = false;
+    let page_screen = run.device.last;
+    run.send(Event::Power);
+    run.tick_after(SUSPEND_DELAY);
+    assert_eq!(run.device.suspended, 0);
+    // Still on the sleep screen, trying again soon.
+    assert_ne!(run.device.last, page_screen);
+    assert!(run.session.deadline(run.now) <= run.now + SLEEP_RETRY);
+    run.device.can_suspend = true;
+    run.tick_after(SLEEP_RETRY);
+    assert_eq!(run.device.suspended, 1);
+    assert_eq!(run.device.last, page_screen);
+}
+
+#[test]
+fn stepping_darkness_up_and_back_returns_to_the_page() {
+    let mut run = Run::new();
+    for _ in 0..8 {
+        run.tap(FORWARD.0, FORWARD.1);
+    }
+    let before = run.session.reader().position().unwrap();
+    run.tap(MENU.0, MENU.1);
+    for _ in 0..3 {
+        run.tap(DARKER.0, DARKER.1);
+    }
+    assert_eq!(run.session.reader().settings().weight, 550.0);
+    for _ in 0..3 {
+        run.tap(LIGHTER.0, LIGHTER.1);
+    }
+    assert_eq!(run.session.reader().settings().weight, 400.0);
+    assert_eq!(run.session.reader().position(), Some(before));
+}
+
+#[test]
+fn stepping_text_size_up_and_back_returns_to_the_page() {
+    let mut run = Run::new();
+    for _ in 0..7 {
+        run.tap(FORWARD.0, FORWARD.1);
+    }
+    let before = run.session.reader().position().unwrap();
+    run.tap(MENU.0, MENU.1);
+    for _ in 0..3 {
+        run.tap(BIGGER.0, BIGGER.1);
+    }
+    assert_eq!(run.session.reader().settings().font_size, 52.0);
+    for _ in 0..3 {
+        run.tap(SMALLER.0, SMALLER.1);
+    }
+    assert_eq!(run.session.reader().settings().font_size, 40.0);
+    assert_eq!(run.session.reader().position(), Some(before));
 }
 
 #[test]

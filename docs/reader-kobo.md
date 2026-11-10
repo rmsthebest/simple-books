@@ -57,7 +57,8 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
 - **Leave** with **Exit to Nickel** in the menu, or by holding the power button for 3
   seconds.
 - **Sleep** with a short press of the power button, or by leaving it alone for 10
-  minutes. Press the power button again to wake. It doesn't sleep while plugged in, since
+  minutes. The sleep screen comes up at once, and the Kobo suspends 15 seconds later,
+  once the screen has finished with the panel. Press the power button again to wake. It doesn't sleep while plugged in, since
   that can hang the Clara BW's kernel; it stays on the sleep screen and sleeps once
   unplugged.
 

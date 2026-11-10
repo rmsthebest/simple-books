@@ -196,7 +196,9 @@ pub(crate) fn restore_screen() -> io::Result<()> {
     };
     let mut var = [0u32; 40];
     if bytes.len() != size_of::<VarInfo>() {
-        return Err(io::Error::other(format!("{SAVED_SCREEN} is the wrong size")));
+        return Err(io::Error::other(format!(
+            "{SAVED_SCREEN} is the wrong size"
+        )));
     }
     for (field, bytes) in var.iter_mut().zip(bytes.as_chunks::<4>().0) {
         *field = u32::from_ne_bytes(*bytes);
