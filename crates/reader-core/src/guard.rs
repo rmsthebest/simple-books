@@ -34,8 +34,12 @@ impl TurnGuard {
     }
 
     /// Whether a turn asked for at `now` should happen. A kept turn starts a
-    /// new window.
+    /// new window. With a zero window the guard is off, and every turn is
+    /// kept, even while the panel is refreshing.
     pub fn allow(&mut self, now: Instant) -> bool {
+        if self.window.is_zero() {
+            return true;
+        }
         if self
             .last
             .is_some_and(|last| now.saturating_duration_since(last) < self.window)
@@ -64,6 +68,15 @@ mod tests {
     use super::*;
 
     const MS: Duration = Duration::from_millis(1);
+
+    #[test]
+    fn a_zero_window_keeps_every_turn() {
+        let start = Instant::now();
+        let mut guard = TurnGuard::new(Duration::ZERO);
+        guard.refreshing(start + 300 * MS);
+        assert!(guard.allow(start));
+        assert!(guard.allow(start + MS));
+    }
 
     #[test]
     fn a_second_turn_inside_the_window_is_ignored() {

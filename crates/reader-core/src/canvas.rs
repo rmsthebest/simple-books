@@ -96,8 +96,12 @@ impl Canvas {
         });
     }
 
-    /// Copies a gray image onto the page.
-    pub(crate) fn copy(&mut self, left: i32, top: i32, width: u32, height: u32, gray: &[u8]) {
+    /// Copies a gray image, `width` by `height` pixels row by row, onto the
+    /// page, clipped to it. Nothing is drawn if `gray` is too short.
+    pub fn copy(&mut self, left: i32, top: i32, width: u32, height: u32, gray: &[u8]) {
+        if gray.len() < width as usize * height as usize {
+            return;
+        }
         self.each_row(left, top, width, height, |row, src_x, src_y, len| {
             row.copy_from_slice(&gray[src_y * width as usize + src_x..][..len]);
         });

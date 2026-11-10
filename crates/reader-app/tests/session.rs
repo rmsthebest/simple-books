@@ -567,8 +567,19 @@ fn exit_leaves_from_anywhere_and_saves_the_place() {
 /// row, and Library and Exit to Nickel along the bottom.
 const CURRENT: (f32, f32) = (500.0, 300.0);
 const FIRST_TILE: (f32, f32) = (140.0, 750.0);
-const HOME_LIBRARY: (f32, f32) = (296.0, 1376.0);
-const HOME_EXIT: (f32, f32) = (776.0, 1376.0);
+const HOME_LIBRARY: (f32, f32) = (194.0, 1376.0);
+const HOME_SETTINGS: (f32, f32) = (471.0, 1376.0);
+const HOME_EXIT: (f32, f32) = (812.0, 1376.0);
+/// On the settings screen: a row's − or +, the toggles, and Done.
+fn setting(row: u8, up: bool) -> (f32, f32) {
+    let x = if up { 967.0 } else { 926.0 - 180.0 - 41.0 };
+    (x, 496.0 + f32::from(row) * 94.0)
+}
+const LINE_SPACING: u8 = 1;
+const LIGHT: u8 = 5;
+const TURN_GUARD: u8 = 7;
+const JUSTIFIED: (f32, f32) = (296.0, 1253.0);
+const SETTINGS_DONE: (f32, f32) = (536.0, 1376.0);
 /// On the library screen: the first two books, sorting by author, and Home.
 const LIBRARY_FIRST: (f32, f32) = (536.0, 306.0);
 const LIBRARY_SECOND: (f32, f32) = (536.0, 438.0);
@@ -822,5 +833,103 @@ fn asleep_in_search_it_wakes_with_the_query() {
     run.tick_after(SUSPEND_DELAY);
     assert_eq!(run.device.suspended, 1);
     assert_eq!(run.session.search_query(), Some("oth"));
+    assert_eq!(run.device.last, screen);
+}
+
+impl Run {
+    fn settings(&mut self) {
+        if !self.session.at_home() {
+            self.tap(MENU.0, MENU.1);
+            self.tap(MENU_HOME.0, MENU_HOME.1);
+        }
+        self.tap(HOME_SETTINGS.0, HOME_SETTINGS.1);
+        assert!(self.session.in_settings());
+    }
+
+    fn step(&mut self, row: u8, up: bool) {
+        let (x, y) = setting(row, up);
+        self.tap(x, y);
+    }
+}
+
+#[test]
+fn settings_lay_the_book_out_again_when_it_is_next_shown() {
+    let mut run = Run::new();
+    for _ in 0..3 {
+        run.tap(FORWARD.0, FORWARD.1);
+    }
+    let block = run.reader().position().unwrap().block;
+    run.settings();
+    let before = run.device.last;
+    run.step(LINE_SPACING, true);
+    assert_eq!(run.session.preferences().line_height, 1.5);
+    assert_ne!(run.device.last, before, "the value and the sample change");
+    assert_eq!(run.device.shown.last(), Some(&Refresh::Partial));
+    run.tap(JUSTIFIED.0, JUSTIFIED.1);
+    assert!(!run.session.preferences().justify);
+    run.tap(SETTINGS_DONE.0, SETTINGS_DONE.1);
+    assert!(run.session.at_home());
+
+    run.tap(CURRENT.0, CURRENT.1);
+    let settings = run.reader().settings();
+    assert_eq!(settings.line_height, 1.5);
+    assert!(!settings.justify);
+    // The page starts with the line it started with before.
+    let after = run.reader().position().unwrap().block;
+    assert!(after <= block && after + 1 >= block, "{block} then {after}");
+
+    let again = Run::at_home(run.device);
+    assert_eq!(again.session.preferences().line_height, 1.5);
+}
+
+#[test]
+fn the_light_changes_from_settings_at_once() {
+    let mut run = Run::at_home(Fake::default());
+    run.settings();
+    run.step(LIGHT, true);
+    assert_eq!(run.device.light.map(|l| l.brightness), Some(40));
+    // Stepping past the end changes and draws nothing.
+    for _ in 0..10 {
+        run.step(LIGHT, true);
+    }
+    let shown = run.device.shown.len();
+    run.step(LIGHT, true);
+    assert_eq!(run.device.shown.len(), shown);
+    assert_eq!(run.device.light.map(|l| l.brightness), Some(100));
+}
+
+#[test]
+fn with_the_turn_guard_off_quick_turns_all_count() {
+    let mut run = Run::new();
+    run.settings();
+    for _ in 0..3 {
+        run.step(TURN_GUARD, false);
+    }
+    assert_eq!(run.session.preferences().turn_guard_ms, 0);
+    run.tap(SETTINGS_DONE.0, SETTINGS_DONE.1);
+    run.tap(CURRENT.0, CURRENT.1);
+    let start = run.page().unwrap();
+    for _ in 0..3 {
+        run.now += Duration::from_millis(50);
+        run.session
+            .handle(Event::Turn(Turn::Next), run.now, &mut run.device)
+            .unwrap();
+    }
+    assert_eq!(run.session.ignored_turns(), 0);
+    assert_eq!(run.page().unwrap().page, start.page + 3);
+}
+
+#[test]
+fn asleep_in_settings_it_wakes_there() {
+    let mut run = Run::at_home(Fake {
+        can_suspend: true,
+        ..Fake::default()
+    });
+    run.settings();
+    let screen = run.device.last;
+    run.send(Event::Power);
+    run.tick_after(SUSPEND_DELAY);
+    assert_eq!(run.device.suspended, 1);
+    assert!(run.session.in_settings());
     assert_eq!(run.device.last, screen);
 }

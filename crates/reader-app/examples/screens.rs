@@ -1,5 +1,5 @@
 //! Writes what the session shows (the home screen, a page, the menu, the
-//! library, search and the sleep screen) as PGM images, to look at them without the device.
+//! library, search, settings and the sleep screen) as PGM images, to look at them without the device.
 //!
 //! ```sh
 //! cargo run -p reader-app --example screens -- books-dir out-dir
@@ -118,7 +118,13 @@ fn main() {
     // The menu's Home button.
     run.tap("home", 150.0, 780.0);
     // Library, then sorted by series.
-    run.tap("library", 296.0, 1376.0);
+    run.tap("settings", 471.0, 1376.0);
+    // Line spacing up, then Done.
+    let started = Instant::now();
+    run.tap("settings-spacing", 967.0, 590.0);
+    println!("settings-spacing: drawn in {:?}", started.elapsed());
+    run.tap("home", 536.0, 1376.0);
+    run.tap("library", 194.0, 1376.0);
     run.tap("library-series", 656.0, 172.0);
     run.tap("search", 896.0, 172.0);
     // h, then j: the second row's sixth and seventh keys.

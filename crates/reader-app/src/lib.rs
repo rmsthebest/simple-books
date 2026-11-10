@@ -4,7 +4,8 @@
 //! It starts on the home screen ([`home`]), with the books the platform
 //! lists through [`Books`], kept in a [`Library`]. The home screen leads to
 //! the library screen ([`shelf`]), every book sorted a screen at a time,
-//! and from there to [`search`], with an on-screen keyboard.
+//! and from there to [`search`], with an on-screen keyboard. The home
+//! screen also leads to [`settings`].
 //!
 //! A platform (the desktop emulator, or the Kobo) turns its input into
 //! [`Event`]s for [`Session::handle`], and does what the session asks
@@ -32,6 +33,7 @@ mod home;
 mod library;
 mod menu;
 mod search;
+mod settings;
 mod shelf;
 mod ui;
 
@@ -198,6 +200,12 @@ pub struct Preferences {
     pub light: Option<Light>,
     /// How the library screen is sorted.
     pub library_sort: Sort,
+    /// Line height as a multiple of the text size.
+    pub line_height: f32,
+    /// The page's side margins, in pixels.
+    pub margin: u32,
+    /// Turns sooner than this after the last one are dropped; 0 for none.
+    pub turn_guard_ms: u32,
 }
 
 impl Default for Preferences {
@@ -212,6 +220,9 @@ impl Default for Preferences {
             optimal_breaks: settings.optimal_breaks,
             light: None,
             library_sort: Sort::default(),
+            line_height: settings.line_height,
+            margin: settings.margin_side,
+            turn_guard_ms: 300,
         }
     }
 }
@@ -225,8 +236,14 @@ impl Preferences {
             justify: self.justify,
             hyphenate: self.hyphenate,
             optimal_breaks: self.optimal_breaks,
+            line_height: self.line_height,
+            margin_side: self.margin,
             ..Settings::default()
         }
+    }
+
+    fn turn_guard(&self) -> TurnGuard {
+        TurnGuard::new(Duration::from_millis(u64::from(self.turn_guard_ms)))
     }
 }
 
@@ -240,6 +257,7 @@ enum Mode {
     Home(home::Layout),
     Library(shelf::Layout),
     Search(search::Layout),
+    Settings(settings::Layout),
     Reading,
     Menu(menu::Layout),
     /// On the sleep screen, waiting to suspend, or awake again after a
@@ -259,6 +277,7 @@ enum Back {
     Library(usize),
     /// Search, with this typed, going back to this library page.
     Search(String, usize),
+    Settings,
     /// The page of the open book, without the menu.
     Reading,
 }
@@ -269,6 +288,8 @@ pub struct Session<R> {
     /// Kept while on the home screen, so going back to it is instant.
     book: Option<book::OpenBook<R>>,
     covers: HashMap<u64, Option<Picture>>,
+    /// The settings screen's sample, and the settings it was laid out with.
+    preview: Option<(Settings, Option<Canvas>)>,
     preferences: Preferences,
     light: Light,
     /// For the menu, the home screen and the sleep screen.
@@ -319,12 +340,13 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             library,
             book: None,
             covers: HashMap::new(),
+            preview: None,
+            guard: preferences.turn_guard(),
             preferences,
             light,
             ui: Typesetter::new(Settings::default(), Some("en")),
             screen: Canvas::new(settings.width, settings.height),
             mode: Mode::Reading,
-            guard: TurnGuard::default(),
             turns: 0,
             ignored: 0,
             last_touch: now,
@@ -346,6 +368,11 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     /// Whether the home screen is up.
     pub fn at_home(&self) -> bool {
         matches!(self.mode, Mode::Home(_))
+    }
+
+    /// Whether the settings screen is up.
+    pub fn in_settings(&self) -> bool {
+        matches!(self.mode, Mode::Settings(_))
     }
 
     /// Whether the library screen is up.
@@ -370,9 +397,12 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     pub fn deadline(&self, now: Instant) -> Instant {
         let mut deadline = match self.mode {
             Mode::Asleep { suspend_at, .. } => suspend_at,
-            Mode::Home(_) | Mode::Library(_) | Mode::Search(_) | Mode::Reading | Mode::Menu(_) => {
-                self.last_touch + AUTO_SLEEP
-            }
+            Mode::Home(_)
+            | Mode::Library(_)
+            | Mode::Search(_)
+            | Mode::Settings(_)
+            | Mode::Reading
+            | Mode::Menu(_) => self.last_touch + AUTO_SLEEP,
         };
         if self.book.as_ref().is_some_and(book::OpenBook::paginating) {
             deadline = deadline.min(now + BACKGROUND_CHECK);
@@ -392,6 +422,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let at_home = matches!(self.mode, Mode::Home(_));
         let in_library = matches!(self.mode, Mode::Library(_));
         let in_search = matches!(self.mode, Mode::Search(_));
+        let in_settings = matches!(self.mode, Mode::Settings(_));
         let in_menu = matches!(self.mode, Mode::Menu(_));
         let asleep = matches!(self.mode, Mode::Asleep { .. });
         match event {
@@ -415,7 +446,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Event::Tap { x, y } if in_library => self.library_tap(x, y, now, device)?,
             Event::Turn(turn) if in_library => self.library_page(turn, now, device),
             Event::Tap { x, y } if in_search => self.search_tap(x, y, now, device)?,
-            _ if at_home || in_library || in_search || in_menu => {}
+            Event::Tap { x, y } if in_settings => self.settings_tap(x, y, now, device),
+            _ if at_home || in_library || in_search || in_settings || in_menu => {}
             Event::Tap { x, y } => self.reading_tap(x, y, now, device)?,
             Event::Turn(turn) => self.turn(turn, now, device)?,
             Event::Back => {
@@ -445,16 +477,24 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let Some(key) = self.library.get(file).map(|entry| entry.key) else {
             return Ok(());
         };
-        if self.book.as_ref().is_none_or(|book| book.file != file) {
-            self.leave_book(device);
-            let settings = self.preferences.settings();
-            self.book = Some(book::OpenBook::open(
-                &self.books,
-                file,
-                key,
-                &settings,
-                device,
-            )?);
+        let settings = self.preferences.settings();
+        match self.book.as_mut() {
+            Some(book) if book.file == file => {
+                // The settings screen changed how pages look since.
+                if *book.reader.settings() != settings {
+                    book.relayout(&settings, device)?;
+                }
+            }
+            _ => {
+                self.leave_book(device);
+                self.book = Some(book::OpenBook::open(
+                    &self.books,
+                    file,
+                    key,
+                    &settings,
+                    device,
+                )?);
+            }
         }
         let when = device.clock();
         self.library.opened(file, when);
@@ -511,6 +551,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         match layout.hit(x, y) {
             Some(home::Action::Open(file)) => self.open(&file, device, now)?,
             Some(home::Action::Library) => self.show_library(0, device, Refresh::Full, now),
+            Some(home::Action::Settings) => self.show_settings(device, Refresh::Full, now),
             Some(home::Action::Exit) => {
                 self.save(device);
                 return Ok(Flow::Exit);
@@ -639,6 +680,77 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             None => {}
         }
         Ok(())
+    }
+
+    /// Shows the settings screen, with the sample laid out again if how
+    /// pages look has changed.
+    fn show_settings(&mut self, device: &mut dyn Device, refresh: Refresh, now: Instant) {
+        let settings = self.preferences.settings();
+        if self
+            .preview
+            .as_ref()
+            .is_none_or(|(laid_out, _)| *laid_out != settings)
+        {
+            let page = settings::preview(&settings);
+            self.preview = Some((settings.clone(), page));
+        }
+        let layout = match &self.mode {
+            Mode::Settings(layout) => layout.clone(),
+            _ => settings::Layout::new(settings.width, settings.height),
+        };
+        let battery = battery_text(device);
+        let preview = self.preview.as_ref().and_then(|(_, page)| page.as_ref());
+        layout.draw(
+            &mut self.screen,
+            &mut self.ui,
+            &self.preferences,
+            self.light,
+            preview,
+            &battery,
+        );
+        device.show(&self.screen, refresh);
+        self.guard.refreshing(now + refresh.duration());
+        self.mode = Mode::Settings(layout);
+    }
+
+    /// A step or a toggle is saved at once; the open book is laid out with
+    /// the new settings when it's next shown.
+    fn settings_tap(&mut self, x: f32, y: f32, now: Instant, device: &mut dyn Device) {
+        let Mode::Settings(layout) = &self.mode else {
+            return;
+        };
+        match layout.hit(x, y) {
+            Some(settings::Action::Step(setting, step)) => {
+                let changed = setting.step(step, &mut self.preferences, &mut self.light);
+                if changed == settings::Changed::Nothing {
+                    return;
+                }
+                self.setting_changed(changed, device);
+                self.show_settings(device, Refresh::Partial, now);
+            }
+            Some(settings::Action::Toggle(toggle)) => {
+                toggle.flip(&mut self.preferences);
+                save_json(device, PREFERENCES, &self.preferences);
+                self.show_settings(device, Refresh::Partial, now);
+            }
+            Some(settings::Action::Done) => self.go_home(device, Refresh::Full, now),
+            None => {}
+        }
+    }
+
+    /// Saves a changed setting, and passes on what the device or the guard
+    /// needs to know.
+    fn setting_changed(&mut self, changed: settings::Changed, device: &mut dyn Device) {
+        match changed {
+            settings::Changed::Light => {
+                device.set_light(self.light);
+                self.preferences.light = Some(self.light);
+            }
+            settings::Changed::Guard => self.guard.window = self.preferences.turn_guard().window,
+            settings::Changed::Layout | settings::Changed::Drawing | settings::Changed::Nothing => {
+            }
+        }
+        save_json(device, PREFERENCES, &self.preferences);
     }
 
     /// Draws the home screen into `screen`.
@@ -770,7 +882,12 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                     }
                 }
             }
-            Mode::Home(_) | Mode::Library(_) | Mode::Search(_) | Mode::Reading | Mode::Menu(_) => {
+            Mode::Home(_)
+            | Mode::Library(_)
+            | Mode::Search(_)
+            | Mode::Settings(_)
+            | Mode::Reading
+            | Mode::Menu(_) => {
                 let idle = now.duration_since(self.last_touch) >= AUTO_SLEEP;
                 if idle && !device.battery().is_some_and(|b| b.charging) {
                     self.sleep(device, now)?;
@@ -786,6 +903,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Mode::Home(_) => Back::Home,
             Mode::Library(layout) => Back::Library(layout.page()),
             Mode::Search(layout) => Back::Search(layout.query().to_owned(), layout.library_page()),
+            Mode::Settings(_) => Back::Settings,
             Mode::Reading | Mode::Menu(_) | Mode::Asleep { .. } => Back::Reading,
         };
         if back == Back::Reading {
@@ -834,6 +952,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Back::Search(query, page) => {
                 self.show_search(query, page, device, Refresh::Full, now);
             }
+            Back::Settings => self.show_settings(device, Refresh::Full, now),
             Back::Home | Back::Reading => self.go_home(device, Refresh::Full, now),
         }
         Ok(())
@@ -883,11 +1002,11 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 .map(|r| r.manifest().title.clone())
                 .unwrap_or_default(),
             battery: battery_text(device),
-            light: format!("{}%", self.light.brightness),
-            warmth: self.light.warmth.to_string(),
-            text_size: format!("{}", p.font_size),
-            darkness: format!("{}", p.weight),
-            contrast: format!("{:.1}", p.gamma),
+            light: settings::Setting::Light.value(p, self.light),
+            warmth: settings::Setting::Warmth.value(p, self.light),
+            text_size: settings::Setting::TextSize.value(p, self.light),
+            darkness: settings::Setting::Darkness.value(p, self.light),
+            contrast: settings::Setting::Contrast.value(p, self.light),
             can_return: reader.is_some_and(Reader::can_go_back),
         }
     }
@@ -920,28 +1039,19 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 self.close_menu(device, now)?;
             }
             Some(menu::Action::Light(step)) => {
-                self.light.brightness = stepped(self.light.brightness, step, 10, 100);
-                self.light_changed(device, now)?;
+                self.menu_step(settings::Setting::Light, step, device, now)?;
             }
             Some(menu::Action::Warmth(step)) => {
-                self.light.warmth = stepped(self.light.warmth, step, 1, 10);
-                self.light_changed(device, now)?;
+                self.menu_step(settings::Setting::Warmth, step, device, now)?;
             }
             Some(menu::Action::TextSize(step)) => {
-                let p = &mut self.preferences;
-                p.font_size = (p.font_size + signed(step, 4.0)).clamp(24.0, 80.0);
-                self.relayout(device, now)?;
+                self.menu_step(settings::Setting::TextSize, step, device, now)?;
             }
             Some(menu::Action::Darkness(step)) => {
-                let p = &mut self.preferences;
-                p.weight = (p.weight + signed(step, 50.0)).clamp(300.0, 700.0);
-                self.relayout(device, now)?;
+                self.menu_step(settings::Setting::Darkness, step, device, now)?;
             }
             Some(menu::Action::Contrast(step)) => {
-                let p = &mut self.preferences;
-                // Kept to tenths, so repeated steps don't drift.
-                p.gamma = ((p.gamma + signed(step, 0.2)).clamp(0.6, 3.0) * 10.0).round() / 10.0;
-                self.relayout(device, now)?;
+                self.menu_step(settings::Setting::Contrast, step, device, now)?;
             }
         }
         Ok(Flow::Continue)
@@ -952,11 +1062,23 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         self.show_page(device, Refresh::Full, now)
     }
 
-    fn light_changed(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
-        device.set_light(self.light);
-        self.preferences.light = Some(self.light);
-        save_json(device, PREFERENCES, &self.preferences);
-        self.draw_menu(device, now)
+    /// A step from the menu: the light changes at once, and the page is
+    /// laid out again for the rest.
+    fn menu_step(
+        &mut self,
+        setting: settings::Setting,
+        step: menu::Step,
+        device: &mut dyn Device,
+        now: Instant,
+    ) -> Result<(), AppError> {
+        match setting.step(step, &mut self.preferences, &mut self.light) {
+            settings::Changed::Nothing => Ok(()),
+            changed @ (settings::Changed::Light | settings::Changed::Guard) => {
+                self.setting_changed(changed, device);
+                self.draw_menu(device, now)
+            }
+            settings::Changed::Layout | settings::Changed::Drawing => self.relayout(device, now),
+        }
     }
 
     /// Saves the changed preferences, and lays the open book out again with
@@ -983,20 +1105,6 @@ fn battery_text(device: &mut dyn Device) -> String {
         }) => format!("{percent}%, charging"),
         Some(Battery { percent, .. }) => format!("{percent}%"),
         None => String::new(),
-    }
-}
-
-fn stepped(value: u8, step: menu::Step, by: u8, max: u8) -> u8 {
-    match step {
-        menu::Step::Down => value.saturating_sub(by),
-        menu::Step::Up => value.saturating_add(by).min(max),
-    }
-}
-
-fn signed(step: menu::Step, by: f32) -> f32 {
-    match step {
-        menu::Step::Down => -by,
-        menu::Step::Up => by,
     }
 }
 

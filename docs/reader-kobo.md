@@ -3,8 +3,8 @@
 The reader runs as an app launched from Nickelite, the way KOReader does: it stops
 Nickel, takes over the screen, and starts Nickel again when you leave it. Nickel stays
 installed and untouched. It reads books already in the reader's own format (`.book`),
-and starts on its own home screen with a library list and search; settings and sync
-come later.
+and starts on its own home screen with a library list, search and settings; sync comes
+later.
 
 It needs Nickelite installed with its **Commands** permission on, as set up for
 KOReader in [`koreader-clara-bw.md`](koreader-clara-bw.md).
@@ -26,8 +26,8 @@ The reader also writes, in `.adds/simple-books/`:
 - `cover-*.pic`: each book's cover, decoded and shrunk once for the home screen;
 - `position-*.json`: the place in each book;
 - `pages-*.json`: each book's page map, so reopening is quick;
-- `preferences.json`: text size, darkness, contrast, and the light once it's changed in
-  the reader;
+- `preferences.json`: the settings, the library's sort, and the light once it's changed
+  in the reader;
 - `reader.log`: what happened, including anything that took over 300 ms, such as opening
   a book; cut back once it passes 1 MB.
 
@@ -57,7 +57,13 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
 
 - **The home screen** shows the book being read, with its cover and how far through it
   is, then the books read lately and the books added lately. Tap any of them to open it
-  where it was left. **Library** and **Exit to Nickel** are at the bottom.
+  where it was left. **Library**, **Settings** and **Exit to Nickel** are at the bottom.
+- **Settings** has text size, line spacing, margins, darkness, contrast, the light and
+  its warmth, and the turn guard, each with − and +, and **Justified** and
+  **Hyphenated**. A sample paragraph at the top is laid out as a page would be, so the
+  change shows at once. The open book is laid out again with them when it's next shown,
+  keeping the first line at the top. With the turn guard **Off**, every turn counts,
+  even while the panel is still drawing the last.
 - **The library** lists every book, a screen at a time, sorted by title, author (surname)
   or series; the choice is kept. **‹** and **›** go through the pages, a tap on a book
   opens it, and **Home** goes back.
