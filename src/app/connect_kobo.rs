@@ -131,10 +131,14 @@ pub fn ConnectKobo(endpoint: String) -> impl IntoView {
 
 #[cfg(feature = "hydrate")]
 mod browser {
-    use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
+    use js_sys::{Array, Uint8Array};
     use wasm_bindgen::{JsCast, JsValue};
-    use wasm_bindgen_futures::JsFuture;
     use web_sys::{Blob, BlobPropertyBag, File, HtmlInputElement, Url};
+
+    pub use crate::app::drive::can_write_to_drive;
+    use crate::app::drive::{
+        Picked, call_async, pick_drive, read_bytes, read_named, subdirectory, write_file,
+    };
 
     const BACKUP_NAME: &str = "Kobo eReader.conf.bak";
     const CONFIG_NAME: &str = "Kobo eReader.conf";
@@ -143,69 +147,6 @@ mod browser {
     pub enum DriveOutcome {
         Written,
         Cancelled,
-    }
-
-    /// Calls a method by name. The File System Access API isn't in `web-sys`'s stable
-    /// bindings, and this needs no `unsafe` to declare them.
-    fn call(target: &JsValue, method: &str, args: &[JsValue]) -> Result<JsValue, JsValue> {
-        let function: Function = Reflect::get(target, &JsValue::from_str(method))?.dyn_into()?;
-        let list: Array = args.iter().collect();
-        Reflect::apply(&function, target, &list)
-    }
-
-    async fn call_async(
-        target: &JsValue,
-        method: &str,
-        args: &[JsValue],
-    ) -> Result<JsValue, JsValue> {
-        let promise: Promise = call(target, method, args)?.dyn_into()?;
-        JsFuture::from(promise).await
-    }
-
-    fn options(key: &str, value: &JsValue) -> Result<JsValue, JsValue> {
-        let object = Object::new();
-        Reflect::set(&object, &JsValue::from_str(key), value)?;
-        Ok(object.into())
-    }
-
-    fn error_name(error: &JsValue) -> String {
-        Reflect::get(error, &JsValue::from_str("name"))
-            .ok()
-            .and_then(|name| name.as_string())
-            .unwrap_or_default()
-    }
-
-    pub fn can_write_to_drive() -> bool {
-        web_sys::window().is_some_and(|window| {
-            Reflect::has(&window, &JsValue::from_str("showDirectoryPicker")).unwrap_or(false)
-        })
-    }
-
-    async fn read_bytes(file: &Blob) -> Result<Vec<u8>, JsValue> {
-        let buffer = JsFuture::from(file.array_buffer()).await?;
-        Ok(Uint8Array::new(&buffer).to_vec())
-    }
-
-    async fn read_named(dir: &JsValue, name: &str) -> Result<Vec<u8>, JsValue> {
-        let handle = call_async(dir, "getFileHandle", &[JsValue::from_str(name)]).await?;
-        let file: Blob = call_async(&handle, "getFile", &[]).await?.dyn_into()?;
-        read_bytes(&file).await
-    }
-
-    /// Writes the file, then reads it back. On a Kobo's drive a write once left an
-    /// empty file without any error, so the result is checked, not trusted.
-    async fn write_file(dir: &JsValue, name: &str, bytes: &[u8]) -> Result<bool, JsValue> {
-        let create = options("create", &JsValue::TRUE)?;
-        let handle = call_async(dir, "getFileHandle", &[JsValue::from_str(name), create]).await?;
-        let writer = call_async(&handle, "createWritable", &[]).await?;
-        let data: JsValue = Uint8Array::from(bytes).into();
-        call_async(&writer, "write", &[data]).await?;
-        call_async(&writer, "close", &[]).await?;
-        Ok(read_named(dir, name).await? == bytes)
-    }
-
-    async fn subdirectory(dir: &JsValue, name: &str) -> Result<JsValue, JsValue> {
-        call_async(dir, "getDirectoryHandle", &[JsValue::from_str(name)]).await
     }
 
     /// An earlier backup is kept if it's a whole config: it's the last known good one,
@@ -218,22 +159,14 @@ mod browser {
     }
 
     pub async fn patch_drive(endpoint: &str) -> Result<DriveOutcome, String> {
-        let window = web_sys::window().ok_or("No browser window")?;
-        let picked = call_async(
-            &window,
-            "showDirectoryPicker",
-            &[options("mode", &JsValue::from_str("readwrite")).map_err(describe)?],
-        )
-        .await;
-        let root = match picked {
-            Ok(root) => root,
-            Err(error) if error_name(&error) == "AbortError" => return Ok(DriveOutcome::Cancelled),
-            Err(error) if error_name(&error) == "SecurityError" => {
+        let root = match pick_drive().await.map_err(describe)? {
+            Picked::Drive(root) => root,
+            Picked::Cancelled => return Ok(DriveOutcome::Cancelled),
+            Picked::Refused => {
                 return Err(
                     "This browser won't open that drive. Choose the file instead.".to_owned(),
                 );
             }
-            Err(error) => return Err(describe(error)),
         };
 
         let not_kobo = |_| {

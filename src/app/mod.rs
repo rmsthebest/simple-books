@@ -4,6 +4,9 @@
 
 pub mod connect_kobo;
 pub mod cover_picker;
+#[cfg(feature = "hydrate")]
+mod drive;
+pub mod install_kobo;
 pub mod upload_zone;
 pub mod watch;
 

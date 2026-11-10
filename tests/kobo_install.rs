@@ -60,11 +60,14 @@ async fn installing_pairs_a_reader_that_can_sync() {
     assert_ne!(again.secret, installed.secret);
     assert_eq!(changes(&server, &again.secret).await, StatusCode::OK);
 
-    // It's on the device page, by the name the reader gives itself.
+    // It's on the device page, by the name the reader gives itself, below
+    // the installer.
     let page = server
         .request(Method::GET, "/device", &[("cookie", &cookie)], Vec::new())
         .await;
-    assert!(String::from_utf8(page.body).unwrap().contains(READER_NAME));
+    let page = String::from_utf8(page.body).unwrap();
+    assert!(page.contains(READER_NAME));
+    assert!(page.contains("Install Simple Books on your Kobo"));
 }
 
 #[tokio::test]

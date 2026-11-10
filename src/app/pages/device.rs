@@ -4,7 +4,7 @@ use leptos::prelude::*;
 
 use super::{Layout, app_state, request_parts, server_error, signed_in, time_ago};
 use crate::{
-    app::connect_kobo::ConnectKobo,
+    app::{connect_kobo::ConnectKobo, install_kobo::InstallKobo},
     server::{
         db::{accounts::DeviceSummary, hardcover::Overview},
         now,
@@ -88,6 +88,9 @@ fn DeviceList(devices: Vec<DeviceSummary>) -> impl IntoView {
                 {if empty { "Connect your Kobo" } else { "Connect another Kobo" }}
             </button>
         </form>
+        <section class="callout">
+            <InstallKobo />
+        </section>
         <details class="pair">
             <summary>"Pair a simple-books reader"</summary>
             <form method="post" action="/device/pair">
