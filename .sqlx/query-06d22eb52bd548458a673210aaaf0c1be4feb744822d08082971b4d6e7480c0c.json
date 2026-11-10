@@ -1,10 +1,10 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", name, created_at, last_seen_at FROM devices\n               WHERE user_id = ?1 AND (replaces_device_id IS NULL OR last_seen_at IS NOT NULL)\n               ORDER BY created_at",
+  "query": "SELECT d.id AS \"device_id!\", d.user_id, d.force_full_sync, d.replaces_device_id\n               FROM devices d JOIN users u ON u.id = d.user_id\n               WHERE d.secret_hash = ?1 AND d.kind = 'kobo' AND u.disabled_at IS NULL",
   "describe": {
     "columns": [
       {
-        "name": "id!",
+        "name": "device_id!",
         "ordinal": 0,
         "type_info": "Integer",
         "origin": {
@@ -15,35 +15,35 @@
         }
       },
       {
-        "name": "name",
+        "name": "user_id",
         "ordinal": 1,
-        "type_info": "Text",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "devices",
-            "name": "name"
+            "name": "user_id"
           }
         }
       },
       {
-        "name": "created_at",
+        "name": "force_full_sync",
         "ordinal": 2,
         "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "devices",
-            "name": "created_at"
+            "name": "force_full_sync"
           }
         }
       },
       {
-        "name": "last_seen_at",
+        "name": "replaces_device_id",
         "ordinal": 3,
         "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "devices",
-            "name": "last_seen_at"
+            "name": "replaces_device_id"
           }
         }
       }
@@ -58,5 +58,5 @@
       true
     ]
   },
-  "hash": "9f7fcef71f40bfa50fc423336f7d89301450c4b4bc745dfc55127c16ee85180f"
+  "hash": "06d22eb52bd548458a673210aaaf0c1be4feb744822d08082971b4d6e7480c0c"
 }

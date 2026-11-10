@@ -140,6 +140,7 @@ impl Db {
         size: Option<i64>,
     ) -> Result<bool, sqlx::Error> {
         let id = book.to_string();
+        let mut tx = self.write.begin().await?;
         let done = sqlx::query!(
             "UPDATE books SET reader_revision = ?1, reader_size = ?2, reader_attempts = 0
              WHERE id = ?3",
@@ -147,9 +148,15 @@ impl Db {
             size,
             id
         )
-        .execute(&self.write)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
+        // Readers sync the file, so everyone holding the book hears of it.
+        // Nickel gets an unchanged entry, which it takes in its stride.
+        if done > 0 {
+            super::scope::notify_holders(&mut tx, &id, super::scope::Reveal::No).await?;
+        }
+        tx.commit().await?;
         Ok(done > 0)
     }
 

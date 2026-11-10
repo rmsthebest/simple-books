@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.reader_size, b.reader_revision\n             FROM library_entries e JOIN books b ON b.id = e.book_id\n             WHERE e.user_id = ?1 AND e.book_id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "reader_size",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "reader_size"
+          }
+        }
+      },
+      {
+        "name": "reader_revision",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "reader_revision"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "6c74cc88d9df94cb5208610ab5be05da98abc11063345bd20f0b4fdfcb2818b7"
+}

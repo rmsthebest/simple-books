@@ -2,17 +2,40 @@
 //! the answer to the form is the page itself, never a redirect with it in the URL.
 
 use axum::{
+    Form,
     extract::{Path, State},
     http::request::Parts,
     response::{IntoResponse, Response},
 };
+
+use serde::Deserialize;
 
 use super::{Revealed, render_with, to};
 use crate::server::{
     AppState,
     auth::{device, session::CurrentUser},
     error::AppError,
+    reader::pair::{self, Entered},
 };
+
+#[derive(Debug, Deserialize)]
+pub struct CodeForm {
+    code: String,
+}
+
+/// `POST /device/pair`: the code a simple-books reader shows.
+pub async fn pair(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Form(form): Form<CodeForm>,
+) -> Result<Response, AppError> {
+    Ok(match pair::enter(&state, user.id, &form.code).await? {
+        Entered::Paired(_) => to("/device?done=paired"),
+        Entered::Wrong => to("/device?error=pair_code"),
+        Entered::Slow => to("/device?error=slow"),
+    }
+    .into_response())
+}
 
 /// `POST /device/connect`
 pub async fn connect(

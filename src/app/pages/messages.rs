@@ -13,7 +13,8 @@ pub fn done(code: &str) -> Option<&'static str> {
         "shared" => "This book is now shared with everyone.",
         "private" => "This book is now just for you.",
         "resync" => "Your Kobo will get everything again at its next sync.",
-        "device_removed" => "That Kobo can no longer sync here.",
+        "device_removed" => "That device can no longer sync here.",
+        "paired" => "Paired. Your reader syncs here from now on.",
         "disabled" => "That user can no longer sign in.",
         "enabled" => "That user can sign in again.",
         "quota" => "Storage limit changed.",
@@ -51,6 +52,9 @@ pub fn error(code: &str) -> Option<&'static str> {
         "interrupted" => "The upload was interrupted. Please try again.",
         "not_image" => "That isn't a JPEG, PNG or WebP image.",
         "server" => "Something went wrong on the server. Please try again.",
+        "pair_code" => {
+            "No reader is waiting with that code. Check it, or start pairing again on the reader."
+        }
         "hardcover_down" => "Hardcover couldn't be reached. Please try again in a moment.",
         "hardcover_link" => {
             "That isn't a link to a book on Hardcover. It looks like https://hardcover.app/books/…"

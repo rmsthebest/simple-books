@@ -1,0 +1,18 @@
+[package]
+name = "sync-proto"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "What the simple-books reader and server say to each other when it syncs."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

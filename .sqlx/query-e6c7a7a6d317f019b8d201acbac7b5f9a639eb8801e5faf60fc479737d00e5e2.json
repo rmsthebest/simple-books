@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.change_seq, b.id AS \"id!\", b.title, b.authors_json, b.series,\n                      b.series_index, b.cover_id, b.reader_size, b.reader_revision, e.added_at\n               FROM library_entries e JOIN books b ON b.id = e.book_id\n               WHERE e.user_id = ?1 AND e.change_seq > ?2 AND e.first_seq IS NOT NULL\n               ORDER BY e.change_seq LIMIT ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "change_seq",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "library_entries",
+            "name": "change_seq"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "authors_json",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "authors_json"
+          }
+        }
+      },
+      {
+        "name": "series",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "series"
+          }
+        }
+      },
+      {
+        "name": "series_index",
+        "ordinal": 5,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "series_index"
+          }
+        }
+      },
+      {
+        "name": "cover_id",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "cover_id"
+          }
+        }
+      },
+      {
+        "name": "reader_size",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "reader_size"
+          }
+        }
+      },
+      {
+        "name": "reader_revision",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "books",
+            "name": "reader_revision"
+          }
+        }
+      },
+      {
+        "name": "added_at",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "library_entries",
+            "name": "added_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "e6c7a7a6d317f019b8d201acbac7b5f9a639eb8801e5faf60fc479737d00e5e2"
+}

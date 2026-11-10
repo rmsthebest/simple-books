@@ -5,7 +5,7 @@ use leptos::prelude::provide_context;
 use leptos_axum::{LeptosRoutes, file_and_error_handler, generate_route_list};
 use tower_http::{catch_panic::CatchPanicLayer, limit::RequestBodyLimitLayer};
 
-use super::{AppState, http, kobo, library, web};
+use super::{AppState, http, kobo, library, reader, web};
 use crate::app::{App, shell};
 
 /// The default limit for request bodies. Upload routes raise it.
@@ -44,6 +44,7 @@ pub fn build(state: AppState) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .merge(library::router(&state))
         .merge(web::router(&state))
+        .nest(sync_proto::PREFIX, reader::router(&state))
         .nest("/kobo/{token}", kobo::router(state.clone()))
         // `nest` doesn't match a bare trailing slash, and the HTML fallback
         // would otherwise answer it, which makes Nickel abort the sync.

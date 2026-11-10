@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO hardcover_books (user_id, book_id, want_status, want_percent, due_at, rev)\n             SELECT e.user_id, e.book_id,\n                    CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)\n                         THEN CASE p.status WHEN 'reading' THEN 2 WHEN 'finished' THEN 3 ELSE 1 END\n                         ELSE CASE s.status WHEN 'Reading' THEN 2 WHEN 'Finished' THEN 3 ELSE 1 END\n                    END,\n                    CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)\n                         THEN p.percent ELSE s.percent END,\n                    ?2, 1\n             FROM library_entries e\n             LEFT JOIN kobo_reading_states s ON s.user_id = e.user_id AND s.book_id = e.book_id\n             LEFT JOIN reader_places p ON p.user_id = e.user_id AND p.book_id = e.book_id\n             WHERE e.user_id = ?1\n             ON CONFLICT (user_id, book_id) DO UPDATE SET\n                 due_at = excluded.due_at, rev = hardcover_books.rev + 1, attempts = 0",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f7fb2ff15b12fa30c26969e946b7c3919bf55abfe126f08b4501a3c74e5b3313"
+}

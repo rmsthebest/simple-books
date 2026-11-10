@@ -11,6 +11,7 @@ pub mod hardcover;
 pub mod http;
 pub mod kobo;
 pub mod library;
+pub mod reader;
 pub mod router;
 pub mod storage;
 #[doc(hidden)]

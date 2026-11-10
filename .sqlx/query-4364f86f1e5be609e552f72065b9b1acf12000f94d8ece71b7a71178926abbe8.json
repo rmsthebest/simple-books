@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT change_seq, book_id FROM book_tombstones\n             WHERE user_id = ?1 AND change_seq > ?2 AND first_seq <= ?2\n             ORDER BY change_seq LIMIT ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "change_seq",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "book_tombstones",
+            "name": "change_seq"
+          }
+        }
+      },
+      {
+        "name": "book_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "book_tombstones",
+            "name": "book_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4364f86f1e5be609e552f72065b9b1acf12000f94d8ece71b7a71178926abbe8"
+}

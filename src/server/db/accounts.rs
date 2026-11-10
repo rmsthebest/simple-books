@@ -36,6 +36,8 @@ pub struct UserSummary {
 pub struct DeviceSummary {
     pub id: i64,
     pub name: String,
+    /// A simple-books reader, rather than a Kobo syncing through Nickel.
+    pub reader: bool,
     pub created_at: i64,
     pub last_seen_at: Option<i64>,
 }
@@ -275,7 +277,7 @@ impl Db {
         Ok(())
     }
 
-    /// Clears out sessions and setup links past their expiry.
+    /// Clears out sessions, setup links and reader codes past their expiry.
     pub async fn delete_expired_credentials(&self) -> Result<(), sqlx::Error> {
         let at = now();
         sqlx::query!("DELETE FROM sessions WHERE expires_at <= ?1", at)
@@ -284,13 +286,16 @@ impl Db {
         sqlx::query!("DELETE FROM setup_tokens WHERE expires_at <= ?1", at)
             .execute(&self.write)
             .await?;
+        sqlx::query!("DELETE FROM device_pairings WHERE expires_at <= ?1", at)
+            .execute(&self.write)
+            .await?;
         Ok(())
     }
 
     /// A user's devices. A reconnect that hasn't been used yet isn't one.
     pub async fn list_devices(&self, user_id: i64) -> Result<Vec<DeviceSummary>, sqlx::Error> {
         let rows = sqlx::query!(
-            r#"SELECT id AS "id!", name, created_at, last_seen_at FROM devices
+            r#"SELECT id AS "id!", name, kind, created_at, last_seen_at FROM devices
                WHERE user_id = ?1 AND (replaces_device_id IS NULL OR last_seen_at IS NOT NULL)
                ORDER BY created_at"#,
             user_id
@@ -302,6 +307,7 @@ impl Db {
             .map(|r| DeviceSummary {
                 id: r.id,
                 name: r.name,
+                reader: r.kind == "reader",
                 created_at: r.created_at,
                 last_seen_at: r.last_seen_at,
             })
@@ -311,7 +317,8 @@ impl Db {
     /// Issues a new credential for a device. The old one keeps working until the
     /// new one is first seen, so a patched config that's never applied can't break
     /// a working Kobo. Repeat calls each add a candidate, because any of the files
-    /// handed out may be the one that gets applied. `None` if it isn't their device.
+    /// handed out may be the one that gets applied. `None` if it isn't their Kobo:
+    /// a simple-books reader pairs again instead.
     pub async fn begin_reconnect(
         &self,
         user_id: i64,
@@ -321,7 +328,7 @@ impl Db {
         let at = now();
         let row = sqlx::query!(
             r#"INSERT INTO devices (user_id, name, secret_hash, replaces_device_id, created_at)
-               SELECT user_id, name, ?1, id, ?2 FROM devices WHERE id = ?3 AND user_id = ?4
+               SELECT user_id, name, ?1, id, ?2 FROM devices WHERE id = ?3 AND user_id = ?4 AND kind = 'kobo'
                RETURNING id AS "id!""#,
             secret_hash,
             at,

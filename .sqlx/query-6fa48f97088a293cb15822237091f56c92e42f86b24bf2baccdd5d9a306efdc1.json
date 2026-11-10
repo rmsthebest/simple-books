@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT u.username FROM devices d JOIN users u ON u.id = d.user_id\n             WHERE d.secret_hash = ?1 AND d.kind = 'reader' AND u.disabled_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "username",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6fa48f97088a293cb15822237091f56c92e42f86b24bf2baccdd5d9a306efdc1"
+}

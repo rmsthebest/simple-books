@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT 1 AS \"found!: i64\" FROM device_pairings\n               WHERE secret_hash = ?1 AND expires_at > ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "found!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6854d6d2accd32930d4bbdded6946561078c150ea3d4ce465e47588e8c755979"
+}

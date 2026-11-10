@@ -246,10 +246,16 @@ impl Db {
         sqlx::query!(
             "INSERT INTO hardcover_books (user_id, book_id, want_status, want_percent, due_at, rev)
              SELECT e.user_id, e.book_id,
-                    CASE s.status WHEN 'Reading' THEN 2 WHEN 'Finished' THEN 3 ELSE 1 END,
-                    s.percent, ?2, 1
+                    CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)
+                         THEN CASE p.status WHEN 'reading' THEN 2 WHEN 'finished' THEN 3 ELSE 1 END
+                         ELSE CASE s.status WHEN 'Reading' THEN 2 WHEN 'Finished' THEN 3 ELSE 1 END
+                    END,
+                    CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)
+                         THEN p.percent ELSE s.percent END,
+                    ?2, 1
              FROM library_entries e
              LEFT JOIN kobo_reading_states s ON s.user_id = e.user_id AND s.book_id = e.book_id
+             LEFT JOIN reader_places p ON p.user_id = e.user_id AND p.book_id = e.book_id
              WHERE e.user_id = ?1
              ON CONFLICT (user_id, book_id) DO UPDATE SET
                  due_at = excluded.due_at, rev = hardcover_books.rev + 1, attempts = 0",

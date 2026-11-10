@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT d.id AS \"device_id!\", d.user_id, d.force_full_sync\n               FROM devices d JOIN users u ON u.id = d.user_id\n               WHERE d.secret_hash = ?1 AND d.kind = 'reader' AND u.disabled_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "device_id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "user_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "force_full_sync",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "force_full_sync"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7ea6f5a24096274f22082f553dd83391c93b570e237fa1bb3d415b6dfe47e3bc"
+}

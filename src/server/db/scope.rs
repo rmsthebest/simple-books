@@ -751,16 +751,32 @@ impl UserScope {
         .execute(&mut *tx)
         .await?;
 
-        // For Hardcover, if connected. Progress waits a minute, so a few page turns
-        // go as one update; finishing goes straight away.
         let want = crate::server::hardcover::rules::status_from_kobo(status);
-        let due = if want == crate::server::hardcover::rules::READ {
-            at
-        } else {
-            at + HARDCOVER_PROGRESS_DELAY
-        };
-        sqlx::query!(
-            "INSERT INTO hardcover_books (user_id, book_id, want_status, want_percent, due_at, rev)
+        tell_hardcover(&mut tx, self.user_id, &id, want, percent, at).await?;
+
+        tx.commit().await?;
+        Ok(Some(at))
+    }
+}
+
+/// Queues what a device said about a book for Hardcover, if the user is
+/// connected. Progress waits a minute, so a few page turns go as one update;
+/// finishing goes straight away. `want` is Hardcover's status number.
+pub(super) async fn tell_hardcover(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    id: &str,
+    want: i64,
+    percent: Option<f64>,
+    at: i64,
+) -> Result<(), sqlx::Error> {
+    let due = if want == crate::server::hardcover::rules::READ {
+        at
+    } else {
+        at + HARDCOVER_PROGRESS_DELAY
+    };
+    sqlx::query!(
+        "INSERT INTO hardcover_books (user_id, book_id, want_status, want_percent, due_at, rev)
              SELECT ?1, ?2, ?3, ?4, ?5, 1
              WHERE EXISTS (SELECT 1 FROM hardcover_accounts WHERE user_id = ?1)
              ON CONFLICT (user_id, book_id) DO UPDATE SET
@@ -768,23 +784,23 @@ impl UserScope {
                  want_percent = excluded.want_percent,
                  due_at = MIN(COALESCE(due_at, excluded.due_at), excluded.due_at),
                  rev = rev + 1",
-            self.user_id,
-            id,
-            want,
-            percent,
-            due
-        )
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-        Ok(Some(at))
-    }
+        user_id,
+        id,
+        want,
+        percent,
+        due
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// Allocates the next value of the user's sync sequence. Must run inside the
 /// write transaction that uses it, so sequence order equals commit order.
-async fn next_seq(tx: &mut Transaction<'_, Sqlite>, user_id: i64) -> Result<i64, sqlx::Error> {
+pub(super) async fn next_seq(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+) -> Result<i64, sqlx::Error> {
     let row = sqlx::query!(
         "UPDATE users SET change_seq = change_seq + 1 WHERE id = ?1 RETURNING change_seq",
         user_id
@@ -796,13 +812,13 @@ async fn next_seq(tx: &mut Transaction<'_, Sqlite>, user_id: i64) -> Result<i64,
 
 /// Whether a change also makes a book sync-visible for those holding it.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Reveal {
+pub(super) enum Reveal {
     Yes,
     No,
 }
 
 /// Queues a book's change for everyone holding it, each in their own sequence.
-async fn notify_holders(
+pub(super) async fn notify_holders(
     tx: &mut Transaction<'_, Sqlite>,
     book: &str,
     reveal: Reveal,

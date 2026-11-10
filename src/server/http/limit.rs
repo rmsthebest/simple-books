@@ -94,6 +94,10 @@ pub struct Limits {
     pub login_user: RateLimit,
     /// Unknown device tokens from one address.
     pub device_failures: RateLimit,
+    /// Codes asked for by simple-books readers from one address.
+    pub pairings: RateLimit,
+    /// Wrong reader codes typed by one user.
+    pub pair_codes: RateLimit,
 }
 
 impl Default for Limits {
@@ -102,6 +106,8 @@ impl Default for Limits {
             login_ip: RateLimit::new(10, Duration::from_mins(15)),
             login_user: RateLimit::new(100, Duration::from_hours(1)),
             device_failures: RateLimit::new(60, Duration::from_mins(1)),
+            pairings: RateLimit::new(10, Duration::from_hours(1)),
+            pair_codes: RateLimit::new(10, Duration::from_mins(15)),
         }
     }
 }

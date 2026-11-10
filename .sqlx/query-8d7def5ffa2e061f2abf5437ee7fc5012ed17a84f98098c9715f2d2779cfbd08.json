@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO devices (user_id, name, secret_hash, replaces_device_id, created_at)\n               SELECT user_id, name, ?1, id, ?2 FROM devices WHERE id = ?3 AND user_id = ?4\n               RETURNING id AS \"id!\"",
+  "query": "INSERT INTO devices (user_id, name, secret_hash, replaces_device_id, created_at)\n               SELECT user_id, name, ?1, id, ?2 FROM devices WHERE id = ?3 AND user_id = ?4 AND kind = 'kobo'\n               RETURNING id AS \"id!\"",
   "describe": {
     "columns": [
       {
@@ -22,5 +22,5 @@
       null
     ]
   },
-  "hash": "9a28cb60056e32da5d751fbda0868bcc1d3b6492b6847cfac376131340442380"
+  "hash": "8d7def5ffa2e061f2abf5437ee7fc5012ed17a84f98098c9715f2d2779cfbd08"
 }

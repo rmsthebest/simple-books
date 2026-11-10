@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT secret_hash, name FROM device_pairings WHERE code = ?1 AND expires_at > ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "secret_hash",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "device_pairings",
+            "name": "secret_hash"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "device_pairings",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "e683c8f07f4c1d2a10cb24f2148e87b45a14776e2d391c22d900406f5876b1c7"
+}

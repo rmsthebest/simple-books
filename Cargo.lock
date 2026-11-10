@@ -3458,6 +3458,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
+ "sync-proto",
  "tempfile",
  "thiserror 2.0.21",
  "time",
@@ -3744,6 +3745,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "sync-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

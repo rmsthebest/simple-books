@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT book_id, chapter, block, offset_chars, revision, percent, status, read_at\n             FROM reader_places WHERE user_id = ?1 AND book_id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "book_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reader_places",
+            "name": "book_id"
+          }
+        }
+      },
+      {
+        "name": "chapter",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "reader_places",
+            "name": "chapter"
+          }
+        }
+      },
+      {
+        "name": "block",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "reader_places",
+            "name": "block"
+          }
+        }
+      },
+      {
+        "name": "offset_chars",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "reader_places",
+            "name": "offset_chars"
+          }
+        }
+      },
+      {
+        "name": "revision",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "reader_places",
+            "name": "revision"
+          }
+        }
+      },
+      {
+        "name": "percent",
+        "ordinal": 5,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "reader_places",
+            "name": "percent"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reader_places",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "read_at",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "reader_places",
+            "name": "read_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3e0ef52c4518a765cd64b059f81b8029507a63efa4fce8fd47afcd1b0a91ad0b"
+}

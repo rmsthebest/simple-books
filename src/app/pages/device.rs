@@ -1,4 +1,4 @@
-//! Connecting a Kobo, and looking after one.
+//! Connecting a Kobo or pairing a simple-books reader, and looking after them.
 
 use leptos::prelude::*;
 
@@ -88,12 +88,31 @@ fn DeviceList(devices: Vec<DeviceSummary>) -> impl IntoView {
                 {if empty { "Connect your Kobo" } else { "Connect another Kobo" }}
             </button>
         </form>
+        <details class="pair">
+            <summary>"Pair a simple-books reader"</summary>
+            <form method="post" action="/device/pair">
+                <label>
+                    "The code your reader shows"
+                    <input
+                        name="code"
+                        required
+                        autocomplete="off"
+                        autocapitalize="characters"
+                        spellcheck="false"
+                        maxlength="16"
+                        placeholder="ABCD-EFGH"
+                    />
+                </label>
+                <button type="submit">"Pair"</button>
+            </form>
+        </details>
     }
 }
 
 #[component]
 fn DeviceRow(device: DeviceSummary) -> impl IntoView {
     let id = device.id;
+    let reader = device.reader;
     let stale = device
         .last_seen_at
         .is_some_and(|seen| now() - seen > STALE_SECONDS);
@@ -104,22 +123,29 @@ fn DeviceRow(device: DeviceSummary) -> impl IntoView {
     view! {
         <li class="device">
             <strong>{device.name}</strong>
+            {reader.then(|| view! { <span class="muted">"simple-books reader"</span> })}
             <span>{seen}</span>
             {stale.then(|| view! {
                 <span class="warning">
-                    "It hasn't synced in a while. If it should have, connect it again."
+                    {if reader {
+                        "It hasn't synced in a while. If it should have, remove it and pair it again."
+                    } else {
+                        "It hasn't synced in a while. If it should have, connect it again."
+                    }}
                 </span>
             })}
             <div class="actions">
-                <form method="post" action=format!("/device/{id}/reconnect")>
-                    <button class="quiet" type="submit">"Connect again"</button>
-                </form>
+                {(!reader).then(|| view! {
+                    <form method="post" action=format!("/device/{id}/reconnect")>
+                        <button class="quiet" type="submit">"Connect again"</button>
+                    </form>
+                })}
                 <form method="post" action=format!("/device/{id}/resync")>
                     <button class="quiet" type="submit">"Send everything again"</button>
                 </form>
                 <details>
                     <summary>"Remove"</summary>
-                    <p>"This Kobo won't be able to sync here any more."</p>
+                    <p>"It won't be able to sync here any more."</p>
                     <form method="post" action=format!("/device/{id}/remove")>
                         <button class="danger" type="submit">"Yes, remove it"</button>
                     </form>

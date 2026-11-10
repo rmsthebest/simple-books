@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO device_pairings (secret_hash, code, name, created_at, expires_at)\n             VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "66d4aa5b1847d2a13aa470b5895129ec010398afd06c9e4607bb6b3166947b38"
+}

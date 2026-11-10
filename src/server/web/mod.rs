@@ -37,6 +37,7 @@ pub fn router(state: &AppState) -> Router<AppState> {
         .route("/books/{id}/add", post(books::add))
         .route("/books/{id}/remove", post(books::remove))
         .route("/device/connect", post(devices::connect))
+        .route("/device/pair", post(devices::pair))
         .route("/device/{id}/reconnect", post(devices::reconnect))
         .route("/device/{id}/resync", post(devices::resync))
         .route("/device/{id}/remove", post(devices::remove))

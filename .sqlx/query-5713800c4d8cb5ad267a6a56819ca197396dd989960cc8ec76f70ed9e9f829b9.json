@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM device_pairings WHERE secret_hash = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "5713800c4d8cb5ad267a6a56819ca197396dd989960cc8ec76f70ed9e9f829b9"
+}

@@ -5,6 +5,8 @@ pub mod accounts;
 pub mod hardcover;
 pub mod jobs;
 pub mod models;
+pub mod pairing;
+pub mod reader;
 pub mod scope;
 pub mod status;
 
@@ -69,7 +71,7 @@ impl Db {
         let row = sqlx::query!(
             r#"SELECT d.id AS "device_id!", d.user_id, d.force_full_sync, d.replaces_device_id
                FROM devices d JOIN users u ON u.id = d.user_id
-               WHERE d.secret_hash = ?1 AND u.disabled_at IS NULL"#,
+               WHERE d.secret_hash = ?1 AND d.kind = 'kobo' AND u.disabled_at IS NULL"#,
             hash
         )
         .fetch_optional(&self.read)

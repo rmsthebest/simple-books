@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/book-convert", "crates/book-format", "crates/epub", "crates/kobo-conf", "crates/reader-app", "crates/reader-core", "crates/reader-emu", "crates/reader-kobo"]
+members = [".", "crates/book-convert", "crates/book-format", "crates/epub", "crates/kobo-conf", "crates/reader-app", "crates/reader-core", "crates/reader-emu", "crates/reader-kobo", "crates/sync-proto"]
 resolver = "3"
 
 [workspace.package]
@@ -47,6 +47,7 @@ required-features = ["ssr"]
 book-convert = { path = "crates/book-convert", optional = true }
 book-format = { path = "crates/book-format", optional = true }
 epub = { path = "crates/epub", optional = true }
+sync-proto = { path = "crates/sync-proto", optional = true }
 leptos = { version = "=0.8.23", features = ["islands"] }
 leptos_meta = "0.8"
 leptos_router = "0.8"
@@ -115,6 +116,10 @@ required-features = ["ssr"]
 name = "web"
 required-features = ["ssr"]
 
+[[test]]
+name = "reader_sync"
+required-features = ["ssr"]
+
 [features]
 default = []
 hydrate = [
@@ -149,6 +154,7 @@ ssr = [
     "dep:serde_json",
     "dep:sha2",
     "dep:sqlx",
+    "dep:sync-proto",
     "dep:thiserror",
     "dep:time",
     "dep:tokio",

@@ -1,10 +1,10 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT d.id AS \"device_id!\", d.user_id, d.force_full_sync, d.replaces_device_id\n               FROM devices d JOIN users u ON u.id = d.user_id\n               WHERE d.secret_hash = ?1 AND u.disabled_at IS NULL",
+  "query": "SELECT id AS \"id!\", name, kind, created_at, last_seen_at FROM devices\n               WHERE user_id = ?1 AND (replaces_device_id IS NULL OR last_seen_at IS NOT NULL)\n               ORDER BY created_at",
   "describe": {
     "columns": [
       {
-        "name": "device_id!",
+        "name": "id!",
         "ordinal": 0,
         "type_info": "Integer",
         "origin": {
@@ -15,35 +15,46 @@
         }
       },
       {
-        "name": "user_id",
+        "name": "name",
         "ordinal": 1,
-        "type_info": "Integer",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "devices",
-            "name": "user_id"
+            "name": "name"
           }
         }
       },
       {
-        "name": "force_full_sync",
+        "name": "kind",
         "ordinal": 2,
-        "type_info": "Integer",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "devices",
-            "name": "force_full_sync"
+            "name": "kind"
           }
         }
       },
       {
-        "name": "replaces_device_id",
+        "name": "created_at",
         "ordinal": 3,
         "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "devices",
-            "name": "replaces_device_id"
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "last_seen_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "last_seen_at"
           }
         }
       }
@@ -55,8 +66,9 @@
       false,
       false,
       false,
+      false,
       true
     ]
   },
-  "hash": "06fabb584625118a0feadb07c6cd8906e9bf9c3544e494b3743e35a1b507203b"
+  "hash": "181b029585de63becb37e7c01464a0ad5daa1d47ccc35e59ea0086f718463022"
 }

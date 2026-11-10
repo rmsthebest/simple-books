@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO reader_places (user_id, book_id, chapter, block, offset_chars, revision,\n                                        percent, status, read_at, device_id, change_seq)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)\n             ON CONFLICT (user_id, book_id) DO UPDATE SET\n                 chapter = excluded.chapter, block = excluded.block,\n                 offset_chars = excluded.offset_chars, revision = excluded.revision,\n                 percent = excluded.percent, status = excluded.status,\n                 read_at = excluded.read_at, device_id = excluded.device_id,\n                 change_seq = excluded.change_seq",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "3a1cff771c2ecffa2cd42ea371038a8efced8c4d368dadcb8d57bad373920a23"
+}

@@ -64,6 +64,47 @@ async fn tokens_never_reach_the_logs() {
         .get(&format!("/kobo/wrong-{token}/v1/library/sync"))
         .await;
 
+    // A simple-books reader pairing and syncing.
+    let start = server
+        .request(
+            Method::POST,
+            "/device/v1/pair",
+            &[("content-type", "application/json")],
+            json!({ "name": "Reader" }).to_string().into_bytes(),
+        )
+        .await
+        .json();
+    let secret = start["secret"].as_str().unwrap().to_owned();
+    let code = start["code"].as_str().unwrap().replace('-', "");
+    let reader_auth = format!("Bearer {secret}");
+    server
+        .request(
+            Method::GET,
+            "/device/v1/pair",
+            &[("authorization", &reader_auth)],
+            Vec::new(),
+        )
+        .await;
+    server
+        .state
+        .db
+        .finish_pairing(scope.user_id(), &code, simple_books::server::now())
+        .await
+        .unwrap();
+    for path in [
+        "/device/v1/changes?since=0".to_owned(),
+        format!("/device/v1/books/{book}"),
+    ] {
+        server
+            .request(
+                Method::GET,
+                &path,
+                &[("authorization", &reader_auth)],
+                Vec::new(),
+            )
+            .await;
+    }
+
     let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
     assert!(
         logs.contains("kobo_trace"),
@@ -74,6 +115,15 @@ async fn tokens_never_reach_the_logs() {
         "paths should be logged, redacted"
     );
     assert!(!logs.contains(&token), "a device token reached the logs");
+    assert!(
+        logs.contains("/device/v1/changes"),
+        "reader requests should be logged"
+    );
+    assert!(
+        !logs.contains(&secret),
+        "a reader's secret reached the logs"
+    );
+    assert!(!logs.contains(&code), "a pairing code reached the logs");
     assert!(
         !logs.contains(bearer),
         "an Authorization header reached the logs"
