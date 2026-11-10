@@ -3,7 +3,8 @@
 //!
 //! It starts on the home screen ([`home`]), with the books the platform
 //! lists through [`Books`], kept in a [`Library`]. The home screen leads to
-//! the library screen ([`shelf`]), every book sorted a screen at a time.
+//! the library screen ([`shelf`]), every book sorted a screen at a time,
+//! and from there to [`search`], with an on-screen keyboard.
 //!
 //! A platform (the desktop emulator, or the Kobo) turns its input into
 //! [`Event`]s for [`Session::handle`], and does what the session asks
@@ -30,6 +31,7 @@ mod folder;
 mod home;
 mod library;
 mod menu;
+mod search;
 mod shelf;
 mod ui;
 
@@ -237,6 +239,7 @@ const COVERS_KEPT: usize = 24;
 enum Mode {
     Home(home::Layout),
     Library(shelf::Layout),
+    Search(search::Layout),
     Reading,
     Menu(menu::Layout),
     /// On the sleep screen, waiting to suspend, or awake again after a
@@ -249,11 +252,13 @@ enum Mode {
 }
 
 /// The screen to go back to after sleeping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Back {
     Home,
     /// The library, at this page.
     Library(usize),
+    /// Search, with this typed, going back to this library page.
+    Search(String, usize),
     /// The page of the open book, without the menu.
     Reading,
 }
@@ -348,6 +353,14 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         matches!(self.mode, Mode::Library(_))
     }
 
+    /// What's typed, if the search screen is up.
+    pub fn search_query(&self) -> Option<&str> {
+        match &self.mode {
+            Mode::Search(layout) => Some(layout.query()),
+            _ => None,
+        }
+    }
+
     /// Turns the guard has dropped so far.
     pub fn ignored_turns(&self) -> u32 {
         self.ignored
@@ -357,7 +370,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     pub fn deadline(&self, now: Instant) -> Instant {
         let mut deadline = match self.mode {
             Mode::Asleep { suspend_at, .. } => suspend_at,
-            Mode::Home(_) | Mode::Library(_) | Mode::Reading | Mode::Menu(_) => {
+            Mode::Home(_) | Mode::Library(_) | Mode::Search(_) | Mode::Reading | Mode::Menu(_) => {
                 self.last_touch + AUTO_SLEEP
             }
         };
@@ -378,6 +391,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         }
         let at_home = matches!(self.mode, Mode::Home(_));
         let in_library = matches!(self.mode, Mode::Library(_));
+        let in_search = matches!(self.mode, Mode::Search(_));
         let in_menu = matches!(self.mode, Mode::Menu(_));
         let asleep = matches!(self.mode, Mode::Asleep { .. });
         match event {
@@ -400,7 +414,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Event::Tap { x, y } if in_menu => return self.menu_tap(x, y, now, device),
             Event::Tap { x, y } if in_library => self.library_tap(x, y, now, device)?,
             Event::Turn(turn) if in_library => self.library_page(turn, now, device),
-            _ if at_home || in_library || in_menu => {}
+            Event::Tap { x, y } if in_search => self.search_tap(x, y, now, device)?,
+            _ if at_home || in_library || in_search || in_menu => {}
             Event::Tap { x, y } => self.reading_tap(x, y, now, device)?,
             Event::Turn(turn) => self.turn(turn, now, device)?,
             Event::Back => {
@@ -554,6 +569,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 }
             }
             Some(shelf::Action::Page(turn)) => self.library_page(turn, now, device),
+            Some(shelf::Action::Search) => {
+                let page = layout.page();
+                self.show_search(String::new(), page, device, Refresh::Full, now);
+            }
             Some(shelf::Action::Home) => self.go_home(device, Refresh::Full, now),
             None => {}
         }
@@ -574,6 +593,52 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             return;
         }
         self.show_library(page, device, Refresh::Partial, now);
+    }
+
+    /// Shows the search screen with `query` typed, to go back to library
+    /// page `page`.
+    fn show_search(
+        &mut self,
+        query: String,
+        page: usize,
+        device: &mut dyn Device,
+        refresh: Refresh,
+        now: Instant,
+    ) {
+        let settings = Settings::default();
+        let layout =
+            search::Layout::new(settings.width, settings.height, &self.library, query, page);
+        let battery = battery_text(device);
+        layout.draw(&mut self.screen, &mut self.ui, &self.library, &battery);
+        device.show(&self.screen, refresh);
+        self.guard.refreshing(now + refresh.duration());
+        self.mode = Mode::Search(layout);
+    }
+
+    /// A key or a result. Keys aren't held back by the turn guard, so
+    /// quick typing isn't lost.
+    fn search_tap(
+        &mut self,
+        x: f32,
+        y: f32,
+        now: Instant,
+        device: &mut dyn Device,
+    ) -> Result<(), AppError> {
+        let Mode::Search(layout) = &self.mode else {
+            return Ok(());
+        };
+        let page = layout.library_page();
+        match layout.hit(x, y) {
+            Some(search::Action::Open(file)) => self.open(&file, device, now)?,
+            Some(search::Action::Back) => self.show_library(page, device, Refresh::Full, now),
+            Some(action) => {
+                if let Some(query) = layout.typed(&action) {
+                    self.show_search(query, page, device, Refresh::Partial, now);
+                }
+            }
+            None => {}
+        }
+        Ok(())
     }
 
     /// Draws the home screen into `screen`.
@@ -695,20 +760,17 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         if let Some(book) = self.book.as_mut() {
             book.collect(device);
         }
-        match self.mode {
-            Mode::Asleep { suspend_at, back } => {
-                if now >= suspend_at {
+        match &mut self.mode {
+            Mode::Asleep { suspend_at, .. } => {
+                if now >= *suspend_at {
                     if !device.battery().is_some_and(|b| b.charging) && device.suspend() {
                         self.wake(device, Instant::now().max(now))?;
                     } else {
-                        self.mode = Mode::Asleep {
-                            suspend_at: now + SLEEP_RETRY,
-                            back,
-                        };
+                        *suspend_at = now + SLEEP_RETRY;
                     }
                 }
             }
-            Mode::Home(_) | Mode::Library(_) | Mode::Reading | Mode::Menu(_) => {
+            Mode::Home(_) | Mode::Library(_) | Mode::Search(_) | Mode::Reading | Mode::Menu(_) => {
                 let idle = now.duration_since(self.last_touch) >= AUTO_SLEEP;
                 if idle && !device.battery().is_some_and(|b| b.charging) {
                     self.sleep(device, now)?;
@@ -723,12 +785,13 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let back = match &self.mode {
             Mode::Home(_) => Back::Home,
             Mode::Library(layout) => Back::Library(layout.page()),
+            Mode::Search(layout) => Back::Search(layout.query().to_owned(), layout.library_page()),
             Mode::Reading | Mode::Menu(_) | Mode::Asleep { .. } => Back::Reading,
         };
         if back == Back::Reading {
             self.compose_page()?;
         }
-        // At home or in the library, `screen` still holds that screen.
+        // Otherwise `screen` still holds the screen that's up.
         let (width, height) = (self.screen.width(), self.screen.height());
         let band = 160;
         let top = height - band;
@@ -756,8 +819,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     }
 
     fn wake(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
-        let back = match self.mode {
-            Mode::Asleep { back, .. } => back,
+        let back = match &self.mode {
+            Mode::Asleep { back, .. } => back.clone(),
             _ => Back::Home,
         };
         self.woke = Some(now);
@@ -768,6 +831,9 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 return self.show_page(device, Refresh::Full, now);
             }
             Back::Library(page) => self.show_library(page, device, Refresh::Full, now),
+            Back::Search(query, page) => {
+                self.show_search(query, page, device, Refresh::Full, now);
+            }
             Back::Home | Back::Reading => self.go_home(device, Refresh::Full, now),
         }
         Ok(())

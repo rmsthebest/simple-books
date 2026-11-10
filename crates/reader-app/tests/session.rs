@@ -572,7 +572,34 @@ const HOME_EXIT: (f32, f32) = (776.0, 1376.0);
 /// On the library screen: the first two books, sorting by author, and Home.
 const LIBRARY_FIRST: (f32, f32) = (536.0, 306.0);
 const LIBRARY_SECOND: (f32, f32) = (536.0, 438.0);
-const SORT_AUTHOR: (f32, f32) = (536.0, 172.0);
+const SORT_AUTHOR: (f32, f32) = (416.0, 172.0);
+const LIBRARY_SEARCH: (f32, f32) = (896.0, 172.0);
+/// On the search screen: the first result, and the keys along the bottom.
+const SEARCH_FIRST: (f32, f32) = (536.0, 306.0);
+const KEY_DELETE: (f32, f32) = (844.0, 1268.0);
+const KEY_LIBRARY: (f32, f32) = (166.0, 1376.0);
+const KEY_SPACE: (f32, f32) = (536.0, 1376.0);
+const KEY_CLEAR: (f32, f32) = (906.0, 1376.0);
+
+/// The middle of a letter's key: eleven to a row in the top two rows, and
+/// seven in the third, centred with Delete after them.
+#[allow(clippy::cast_precision_loss, reason = "key positions")]
+fn key(letter: char) -> (f32, f32) {
+    let rows = ["qwertyuiopå", "asdfghjklöä", "zxcvbnm"];
+    let (row, at) = rows
+        .iter()
+        .enumerate()
+        .find_map(|(row, keys)| keys.chars().position(|c| c == letter).map(|at| (row, at)))
+        .expect("a key");
+    let y = 1004.0 + row as f32 * 108.0 + 48.0;
+    let x = if row == 2 {
+        64.0 + (at as f32 + 1.0) * 88.0 + 38.0
+    } else {
+        let unit = (944.0 - 10.0 * 12.0) / 11.0;
+        64.0 + at as f32 * (unit + 12.0) + unit / 2.0
+    };
+    (x, y)
+}
 const LIBRARY_HOME: (f32, f32) = (198.0, 1376.0);
 /// The menu's Home button, first on the bottom row when there's nowhere to
 /// return to.
@@ -713,4 +740,87 @@ fn asleep_in_the_library_it_wakes_there() {
     let shown = run.device.shown.len();
     run.send(Event::Turn(Turn::Next));
     assert_eq!(run.device.shown.len(), shown);
+}
+
+impl Run {
+    /// From home to the search screen.
+    fn search(&mut self) {
+        self.tap(HOME_LIBRARY.0, HOME_LIBRARY.1);
+        self.tap(LIBRARY_SEARCH.0, LIBRARY_SEARCH.1);
+        assert_eq!(self.session.search_query(), Some(""));
+    }
+
+    fn type_text(&mut self, text: &str) {
+        for letter in text.chars() {
+            if letter == ' ' {
+                self.tap(KEY_SPACE.0, KEY_SPACE.1);
+            } else {
+                let (x, y) = key(letter);
+                self.tap(x, y);
+            }
+        }
+    }
+}
+
+#[test]
+fn search_finds_as_you_type_and_opens_the_book() {
+    let mut run = Run::at_home(Fake::default());
+    run.search();
+    let empty = run.device.last;
+    run.type_text("oth");
+    assert_eq!(run.session.search_query(), Some("oth"));
+    assert_ne!(run.device.last, empty);
+    assert_eq!(run.device.shown.last(), Some(&Refresh::Partial));
+    run.tap(SEARCH_FIRST.0, SEARCH_FIRST.1);
+    assert_eq!(run.reader().manifest().title, "Other book");
+}
+
+#[test]
+fn every_word_typed_must_match() {
+    let mut run = Run::at_home(Fake::default());
+    run.search();
+    // Both books are "… book", but only one is the test book.
+    run.type_text("book test");
+    assert_eq!(run.session.search_query(), Some("book test"));
+    run.tap(SEARCH_FIRST.0, SEARCH_FIRST.1);
+    assert_eq!(run.reader().manifest().title, "Test book");
+}
+
+#[test]
+fn delete_clear_and_back_to_the_library() {
+    let mut run = Run::at_home(Fake::default());
+    run.search();
+    run.type_text("te");
+    run.tap(KEY_DELETE.0, KEY_DELETE.1);
+    assert_eq!(run.session.search_query(), Some("t"));
+    run.type_text("es");
+    run.tap(KEY_CLEAR.0, KEY_CLEAR.1);
+    assert_eq!(run.session.search_query(), Some(""));
+    // Nothing to delete or clear: nothing is drawn.
+    let shown = run.device.shown.len();
+    run.tap(KEY_DELETE.0, KEY_DELETE.1);
+    run.tap(KEY_CLEAR.0, KEY_CLEAR.1);
+    run.tap(KEY_SPACE.0, KEY_SPACE.1);
+    assert_eq!(run.device.shown.len(), shown);
+    // With nothing typed there are no results to open.
+    run.tap(SEARCH_FIRST.0, SEARCH_FIRST.1);
+    assert!(run.session.reader().is_none());
+    run.tap(KEY_LIBRARY.0, KEY_LIBRARY.1);
+    assert!(run.session.in_library());
+}
+
+#[test]
+fn asleep_in_search_it_wakes_with_the_query() {
+    let mut run = Run::at_home(Fake {
+        can_suspend: true,
+        ..Fake::default()
+    });
+    run.search();
+    run.type_text("oth");
+    let screen = run.device.last;
+    run.send(Event::Power);
+    run.tick_after(SUSPEND_DELAY);
+    assert_eq!(run.device.suspended, 1);
+    assert_eq!(run.session.search_query(), Some("oth"));
+    assert_eq!(run.device.last, screen);
 }

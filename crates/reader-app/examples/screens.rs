@@ -1,5 +1,5 @@
 //! Writes what the session shows (the home screen, a page, the menu, the
-//! library and the sleep screen) as PGM images, to look at them without the device.
+//! library, search and the sleep screen) as PGM images, to look at them without the device.
 //!
 //! ```sh
 //! cargo run -p reader-app --example screens -- books-dir out-dir
@@ -119,6 +119,15 @@ fn main() {
     run.tap("home", 150.0, 780.0);
     // Library, then sorted by series.
     run.tap("library", 296.0, 1376.0);
-    run.tap("library-series", 840.0, 172.0);
+    run.tap("library-series", 656.0, 172.0);
+    run.tap("search", 896.0, 172.0);
+    // h, then j: the second row's sixth and seventh keys.
+    let unit = (944.0 - 10.0 * 12.0) / 11.0;
+    for (i, name) in [(5.0, "search-h"), (6.0, "search-hj")] {
+        let x = 64.0 + i * (unit + 12.0) + unit / 2.0;
+        let started = Instant::now();
+        run.tap(name, x, 1112.0 + 48.0);
+        println!("{name}: drawn in {:?}", started.elapsed());
+    }
     run.send("sleep", Event::Power);
 }

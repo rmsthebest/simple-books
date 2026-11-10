@@ -15,7 +15,7 @@ use crate::{
 const SORT_TOP: f32 = HEADER + 24.0;
 const SORT_HEIGHT: f32 = 88.0;
 /// A book in the list: its title, then its authors and series.
-const ROW_HEIGHT: f32 = 132.0;
+pub(crate) const ROW_HEIGHT: f32 = 132.0;
 const TITLE_SIZE: f32 = 38.0;
 const DETAIL_SIZE: f32 = 30.0;
 
@@ -39,6 +39,7 @@ pub(crate) enum Action {
     Open(String),
     Sort(Sort),
     Page(Turn),
+    Search,
     Home,
 }
 
@@ -67,10 +68,11 @@ impl Layout {
             (Sort::Author, "Author"),
             (Sort::Series, "Series"),
         ];
-        let sort_row = ui::row(MARGIN, SORT_TOP, content, SORT_HEIGHT, &[1.0; 3]);
-        for (rect, (sort, label)) in sort_row.into_iter().zip(sorts) {
-            buttons.push((rect, Action::Sort(sort), label));
+        let sort_row = ui::row(MARGIN, SORT_TOP, content, SORT_HEIGHT, &[1.0; 4]);
+        for (rect, (sort, label)) in sort_row.iter().zip(sorts) {
+            buttons.push((*rect, Action::Sort(sort), label));
         }
+        buttons.push((sort_row[3], Action::Search, "Search"));
 
         let bottom_top = height - BUTTON_HEIGHT - 24.0;
         let list_top = SORT_TOP + SORT_HEIGHT + 24.0;
@@ -184,7 +186,13 @@ impl Layout {
 
 /// A book in the list: its title, with how far through it is if it's been
 /// opened, and under that its authors and series.
-fn draw_row(canvas: &mut Canvas, ui: &mut Typesetter, entry: &Entry, rect: Rect, sort: Sort) {
+pub(crate) fn draw_row(
+    canvas: &mut Canvas,
+    ui: &mut Typesetter,
+    entry: &Entry,
+    rect: Rect,
+    sort: Sort,
+) {
     let title_baseline = rect.top + 52.0;
     let mut title_room = rect.width;
     if entry.opened.is_some() {
@@ -230,7 +238,7 @@ pub(crate) fn sorted(library: &Library, sort: Sort) -> Vec<&Entry> {
     books
 }
 
-fn compare(a: &Entry, b: &Entry, sort: Sort) -> Ordering {
+pub(crate) fn compare(a: &Entry, b: &Entry, sort: Sort) -> Ordering {
     let by_title = || {
         title_key(&a.title)
             .cmp(&title_key(&b.title))

@@ -120,8 +120,27 @@ pub(crate) fn button(canvas: &mut Canvas, ui: &mut Typesetter, rect: Rect, label
 /// A button that's one of a choice, such as how to sort: the chosen one is
 /// gray with a heavier outline and a bolder label.
 pub(crate) fn toggle(canvas: &mut Canvas, ui: &mut Typesetter, rect: Rect, label: &str, on: bool) {
+    let size = if label.chars().count() == 1 {
+        64.0
+    } else {
+        LABEL_SIZE
+    };
+    let weight = if on { 700.0 } else { 500.0 };
+    labelled(canvas, ui, rect, label, size, weight, on);
+}
+
+/// An outlined button with `label` centred at `size`, gray inside if `on`.
+pub(crate) fn labelled(
+    canvas: &mut Canvas,
+    ui: &mut Typesetter,
+    rect: Rect,
+    label: &str,
+    size: f32,
+    weight: f32,
+    on: bool,
+) {
     frame(canvas, rect);
-    let weight = if on {
+    if on {
         let (left, top, width, height) = rect.pixels();
         let inset = 2 * BORDER;
         canvas.fill(
@@ -131,15 +150,7 @@ pub(crate) fn toggle(canvas: &mut Canvas, ui: &mut Typesetter, rect: Rect, label
             height.saturating_sub(2 * inset),
             210,
         );
-        700.0
-    } else {
-        500.0
-    };
-    let size = if label.chars().count() == 1 {
-        64.0
-    } else {
-        LABEL_SIZE
-    };
+    }
     let label = fit(ui, label, size, weight, rect.width - 24.0);
     let label_width = ui.label_width(&label, size, weight);
     let x = rect.left + (rect.width - label_width) / 2.0;
