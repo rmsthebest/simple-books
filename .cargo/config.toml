@@ -4,3 +4,8 @@ SQLX_OFFLINE = "true"
 # Leptos reads this when it's compiled to name the WASM file. cargo-leptos sets it, and a
 # plain `cargo build` needs the same value or pages ask for a file that doesn't exist.
 LEPTOS_OUTPUT_NAME = "simple-books"
+
+# The Kobo. Static musl binaries linked with the toolchain's own lld, so no
+# cross C toolchain is needed.
+[target.armv7-unknown-linux-musleabihf]
+linker = "rust-lld"

@@ -17,6 +17,9 @@ cargo clippy --lib --target wasm32-unknown-unknown --features hydrate -- -D warn
 step "tests"
 cargo test --workspace --features ssr
 
+step "reader engine links for the Kobo"
+cargo build -p reader-core --examples --target armv7-unknown-linux-musleabihf
+
 step "sqlx cache is current"
 scripts/sqlx-prepare.sh --check
 
