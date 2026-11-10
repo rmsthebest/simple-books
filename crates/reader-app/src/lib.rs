@@ -2,7 +2,8 @@
 //! the passing of time does, and what goes on the screen.
 //!
 //! It starts on the home screen ([`home`]), with the books the platform
-//! lists through [`Books`], kept in a [`Library`].
+//! lists through [`Books`], kept in a [`Library`]. The home screen leads to
+//! the library screen ([`shelf`]), every book sorted a screen at a time.
 //!
 //! A platform (the desktop emulator, or the Kobo) turns its input into
 //! [`Event`]s for [`Session::handle`], and does what the session asks
@@ -29,6 +30,7 @@ mod folder;
 mod home;
 mod library;
 mod menu;
+mod shelf;
 mod ui;
 
 use std::{
@@ -45,6 +47,7 @@ use serde::{Deserialize, Serialize};
 
 pub use folder::Folder;
 pub use library::{Entry, Library};
+pub use shelf::Sort;
 
 /// A full refresh every this many turns clears ghosting.
 pub const FULL_EVERY: u32 = 6;
@@ -191,6 +194,8 @@ pub struct Preferences {
     pub optimal_breaks: bool,
     /// `None` until changed here, so the light stays as Nickel left it.
     pub light: Option<Light>,
+    /// How the library screen is sorted.
+    pub library_sort: Sort,
 }
 
 impl Default for Preferences {
@@ -204,6 +209,7 @@ impl Default for Preferences {
             hyphenate: settings.hyphenate,
             optimal_breaks: settings.optimal_breaks,
             light: None,
+            library_sort: Sort::default(),
         }
     }
 }
@@ -230,6 +236,7 @@ const COVERS_KEPT: usize = 24;
 #[derive(Debug)]
 enum Mode {
     Home(home::Layout),
+    Library(shelf::Layout),
     Reading,
     Menu(menu::Layout),
     /// On the sleep screen, waiting to suspend, or awake again after a
@@ -237,9 +244,18 @@ enum Mode {
     Asleep {
         /// When to try to suspend next.
         suspend_at: Instant,
-        /// The screen to go back to.
-        reading: bool,
+        back: Back,
     },
+}
+
+/// The screen to go back to after sleeping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Back {
+    Home,
+    /// The library, at this page.
+    Library(usize),
+    /// The page of the open book, without the menu.
+    Reading,
 }
 
 pub struct Session<R> {
@@ -327,6 +343,11 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         matches!(self.mode, Mode::Home(_))
     }
 
+    /// Whether the library screen is up.
+    pub fn in_library(&self) -> bool {
+        matches!(self.mode, Mode::Library(_))
+    }
+
     /// Turns the guard has dropped so far.
     pub fn ignored_turns(&self) -> u32 {
         self.ignored
@@ -336,7 +357,9 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     pub fn deadline(&self, now: Instant) -> Instant {
         let mut deadline = match self.mode {
             Mode::Asleep { suspend_at, .. } => suspend_at,
-            Mode::Home(_) | Mode::Reading | Mode::Menu(_) => self.last_touch + AUTO_SLEEP,
+            Mode::Home(_) | Mode::Library(_) | Mode::Reading | Mode::Menu(_) => {
+                self.last_touch + AUTO_SLEEP
+            }
         };
         if self.book.as_ref().is_some_and(book::OpenBook::paginating) {
             deadline = deadline.min(now + BACKGROUND_CHECK);
@@ -354,6 +377,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             self.last_touch = now;
         }
         let at_home = matches!(self.mode, Mode::Home(_));
+        let in_library = matches!(self.mode, Mode::Library(_));
         let in_menu = matches!(self.mode, Mode::Menu(_));
         let asleep = matches!(self.mode, Mode::Asleep { .. });
         match event {
@@ -374,7 +398,9 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             }
             Event::Tap { x, y } if at_home => return self.home_tap(x, y, now, device),
             Event::Tap { x, y } if in_menu => return self.menu_tap(x, y, now, device),
-            _ if at_home || in_menu => {}
+            Event::Tap { x, y } if in_library => self.library_tap(x, y, now, device)?,
+            Event::Turn(turn) if in_library => self.library_page(turn, now, device),
+            _ if at_home || in_library || in_menu => {}
             Event::Tap { x, y } => self.reading_tap(x, y, now, device)?,
             Event::Turn(turn) => self.turn(turn, now, device)?,
             Event::Back => {
@@ -469,6 +495,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         };
         match layout.hit(x, y) {
             Some(home::Action::Open(file)) => self.open(&file, device, now)?,
+            Some(home::Action::Library) => self.show_library(0, device, Refresh::Full, now),
             Some(home::Action::Exit) => {
                 self.save(device);
                 return Ok(Flow::Exit);
@@ -487,6 +514,66 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         device.show(&self.screen, refresh);
         self.guard.refreshing(now + refresh.duration());
         self.mode = Mode::Home(layout);
+    }
+
+    /// Shows page `page` of the library, sorted as last chosen.
+    fn show_library(
+        &mut self,
+        page: usize,
+        device: &mut dyn Device,
+        refresh: Refresh,
+        now: Instant,
+    ) {
+        let settings = Settings::default();
+        let sort = self.preferences.library_sort;
+        let layout = shelf::Layout::new(settings.width, settings.height, &self.library, sort, page);
+        let battery = battery_text(device);
+        layout.draw(&mut self.screen, &mut self.ui, &self.library, &battery);
+        device.show(&self.screen, refresh);
+        self.guard.refreshing(now + refresh.duration());
+        self.mode = Mode::Library(layout);
+    }
+
+    fn library_tap(
+        &mut self,
+        x: f32,
+        y: f32,
+        now: Instant,
+        device: &mut dyn Device,
+    ) -> Result<(), AppError> {
+        let Mode::Library(layout) = &self.mode else {
+            return Ok(());
+        };
+        match layout.hit(x, y) {
+            Some(shelf::Action::Open(file)) => self.open(&file, device, now)?,
+            Some(shelf::Action::Sort(sort)) => {
+                if sort != layout.sort() {
+                    self.preferences.library_sort = sort;
+                    save_json(device, PREFERENCES, &self.preferences);
+                    self.show_library(0, device, Refresh::Partial, now);
+                }
+            }
+            Some(shelf::Action::Page(turn)) => self.library_page(turn, now, device),
+            Some(shelf::Action::Home) => self.go_home(device, Refresh::Full, now),
+            None => {}
+        }
+        Ok(())
+    }
+
+    /// The library's next or previous page, if there is one. Dropped while
+    /// the last page is still being drawn, like a turn.
+    fn library_page(&mut self, turn: Turn, now: Instant, device: &mut dyn Device) {
+        let Mode::Library(layout) = &self.mode else {
+            return;
+        };
+        let page = match turn {
+            Turn::Next => layout.page() + 1,
+            Turn::Previous => layout.page().saturating_sub(1),
+        };
+        if page == layout.page() || page >= layout.pages() || !self.guard.allow(now) {
+            return;
+        }
+        self.show_library(page, device, Refresh::Partial, now);
     }
 
     /// Draws the home screen into `screen`.
@@ -609,22 +696,19 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             book.collect(device);
         }
         match self.mode {
-            Mode::Asleep {
-                suspend_at,
-                reading,
-            } => {
+            Mode::Asleep { suspend_at, back } => {
                 if now >= suspend_at {
                     if !device.battery().is_some_and(|b| b.charging) && device.suspend() {
                         self.wake(device, Instant::now().max(now))?;
                     } else {
                         self.mode = Mode::Asleep {
                             suspend_at: now + SLEEP_RETRY,
-                            reading,
+                            back,
                         };
                     }
                 }
             }
-            Mode::Home(_) | Mode::Reading | Mode::Menu(_) => {
+            Mode::Home(_) | Mode::Library(_) | Mode::Reading | Mode::Menu(_) => {
                 let idle = now.duration_since(self.last_touch) >= AUTO_SLEEP;
                 if idle && !device.battery().is_some_and(|b| b.charging) {
                     self.sleep(device, now)?;
@@ -636,11 +720,15 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
 
     fn sleep(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
         self.save(device);
-        let reading = !matches!(self.mode, Mode::Home(_));
-        if reading {
+        let back = match &self.mode {
+            Mode::Home(_) => Back::Home,
+            Mode::Library(layout) => Back::Library(layout.page()),
+            Mode::Reading | Mode::Menu(_) | Mode::Asleep { .. } => Back::Reading,
+        };
+        if back == Back::Reading {
             self.compose_page()?;
         }
-        // At home, `screen` still holds the home screen.
+        // At home or in the library, `screen` still holds that screen.
         let (width, height) = (self.screen.width(), self.screen.height());
         let band = 160;
         let top = height - band;
@@ -662,22 +750,27 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         device.show(&self.screen, Refresh::Full);
         self.mode = Mode::Asleep {
             suspend_at: now + SUSPEND_DELAY,
-            reading,
+            back,
         };
         Ok(())
     }
 
     fn wake(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
-        let reading = matches!(self.mode, Mode::Asleep { reading: true, .. });
+        let back = match self.mode {
+            Mode::Asleep { back, .. } => back,
+            _ => Back::Home,
+        };
         self.woke = Some(now);
         self.last_touch = now;
-        if reading && self.book.is_some() {
-            self.mode = Mode::Reading;
-            self.show_page(device, Refresh::Full, now)
-        } else {
-            self.go_home(device, Refresh::Full, now);
-            Ok(())
+        match back {
+            Back::Reading if self.book.is_some() => {
+                self.mode = Mode::Reading;
+                return self.show_page(device, Refresh::Full, now);
+            }
+            Back::Library(page) => self.show_library(page, device, Refresh::Full, now),
+            Back::Home | Back::Reading => self.go_home(device, Refresh::Full, now),
         }
+        Ok(())
     }
 
     /// Copies the current page into `screen`, to draw over.

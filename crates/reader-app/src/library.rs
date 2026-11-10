@@ -47,6 +47,17 @@ pub struct Entry {
     pub progress: Option<f32>,
 }
 
+impl Entry {
+    /// The series and the book's place in it, such as "Earthsea, book 2".
+    pub fn series_text(&self) -> Option<String> {
+        let series = self.series.as_ref()?;
+        Some(match series.index {
+            Some(index) => format!("{}, book {index}", series.name),
+            None => series.name.clone(),
+        })
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Library {
     books: Vec<Entry>,

@@ -6,11 +6,9 @@ use reader_core::{Canvas, Picture, Typesetter};
 
 use crate::{
     library::{Entry, Library},
-    ui::{self, LABEL_SIZE, Rect},
+    ui::{self, BUTTON_HEIGHT, HEADER, LABEL_SIZE, MARGIN, Rect},
 };
 
-const MARGIN: f32 = 64.0;
-const HEADER: f32 = 104.0;
 /// The book being read: its cover's size.
 const CURRENT_COVER: (f32, f32) = (240.0, 360.0);
 /// Covers in a row, and the gap between them.
@@ -23,7 +21,6 @@ const ROW_TITLE: f32 = 70.0;
 const TITLE_LINES: usize = 2;
 /// Between one row's titles and the next row's label.
 const ROW_SPACE: f32 = 24.0;
-const BUTTON_HEIGHT: f32 = 96.0;
 
 const TITLE_SIZE: f32 = 48.0;
 const SMALL_SIZE: f32 = 32.0;
@@ -33,6 +30,7 @@ const TILE_TITLE_SIZE: f32 = 26.0;
 pub(crate) enum Action {
     /// Opens the book in this file.
     Open(String),
+    Library,
     Exit,
 }
 
@@ -125,16 +123,11 @@ impl Layout {
             top = covers_top + tile_height + ROW_TITLE + ROW_SPACE;
         }
 
-        let buttons = vec![(
-            Rect {
-                left: MARGIN,
-                top: buttons_top,
-                width: content,
-                height: BUTTON_HEIGHT,
-            },
-            Action::Exit,
-            "Exit to Nickel",
-        )];
+        let bottom = ui::row(MARGIN, buttons_top, content, BUTTON_HEIGHT, &[1.0, 1.0]);
+        let buttons = vec![
+            (bottom[0], Action::Library, "Library"),
+            (bottom[1], Action::Exit, "Exit to Nickel"),
+        ];
         Self {
             width,
             empty: library.books().is_empty(),
@@ -174,17 +167,7 @@ impl Layout {
         battery: &str,
     ) {
         canvas.clear();
-        let baseline = HEADER * 0.62;
-        ui.draw_label(canvas, "Simple Books", (MARGIN, baseline), 44.0, 600.0);
-        let battery_width = ui.label_width(battery, LABEL_SIZE, 400.0);
-        ui.draw_label(
-            canvas,
-            battery,
-            (self.width - MARGIN - battery_width, baseline),
-            LABEL_SIZE,
-            400.0,
-        );
-        canvas.fill(0, HEADER as i32, self.width as u32, 3, 0);
+        ui::header(canvas, ui, "Simple Books", battery);
 
         if let Some((file, rect)) = &self.current
             && let Some(entry) = library.get(file)
@@ -263,11 +246,7 @@ fn draw_current(
         ui.draw_label(canvas, &authors, (left, y), LABEL_SIZE, 400.0);
         y += LABEL_SIZE * 1.4;
     }
-    if let Some(series) = &entry.series {
-        let text = match series.index {
-            Some(index) => format!("{}, book {index}", series.name),
-            None => series.name.clone(),
-        };
+    if let Some(text) = entry.series_text() {
         let text = ui::fit(ui, &text, SMALL_SIZE, 400.0, room);
         ui.draw_label(canvas, &text, (left, y), SMALL_SIZE, 400.0);
     }

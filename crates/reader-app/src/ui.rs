@@ -7,6 +7,14 @@ use reader_core::{Canvas, Typesetter};
 pub(crate) const BORDER: u32 = 3;
 /// Button labels, and most other text outside the book.
 pub(crate) const LABEL_SIZE: f32 = 40.0;
+/// The space at each side of the home and library screens.
+pub(crate) const MARGIN: f32 = 64.0;
+/// The bar along the top of the home and library screens.
+pub(crate) const HEADER: f32 = 104.0;
+/// The buttons along the bottom of the home and library screens.
+pub(crate) const BUTTON_HEIGHT: f32 = 96.0;
+/// Between buttons in a row.
+pub(crate) const GAP: f32 = 16.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Rect {
@@ -63,20 +71,80 @@ pub(crate) fn frame(canvas: &mut Canvas, rect: Rect) {
     );
 }
 
+/// The screen's title on the left of the bar along the top, `right` (such
+/// as the battery) on its right, and a rule under it.
+pub(crate) fn header(canvas: &mut Canvas, ui: &mut Typesetter, title: &str, right: &str) {
+    let width = canvas.width() as f32;
+    let baseline = HEADER * 0.62;
+    let right_width = ui.label_width(right, LABEL_SIZE, 400.0);
+    let room = width - 2.0 * MARGIN - right_width - 32.0;
+    let title = fit(ui, title, 44.0, 600.0, room);
+    ui.draw_label(canvas, &title, (MARGIN, baseline), 44.0, 600.0);
+    ui.draw_label(
+        canvas,
+        right,
+        (width - MARGIN - right_width, baseline),
+        LABEL_SIZE,
+        400.0,
+    );
+    canvas.fill(0, HEADER as i32, width as u32, BORDER, 0);
+}
+
+/// Rectangles side by side from `left`, `width` across between them, each
+/// taking its share of it after a [`GAP`] between each two.
+pub(crate) fn row(left: f32, top: f32, width: f32, height: f32, shares: &[f32]) -> Vec<Rect> {
+    let total: f32 = shares.iter().sum();
+    let unit = (width - GAP * (shares.len() as f32 - 1.0)) / total;
+    let mut x = left;
+    shares
+        .iter()
+        .map(|share| {
+            let rect = Rect {
+                left: x,
+                top,
+                width: unit * share,
+                height,
+            };
+            x += unit * share + GAP;
+            rect
+        })
+        .collect()
+}
+
 /// An outlined button with its label in the middle. A single character,
 /// such as − or +, is drawn larger.
 pub(crate) fn button(canvas: &mut Canvas, ui: &mut Typesetter, rect: Rect, label: &str) {
+    toggle(canvas, ui, rect, label, false);
+}
+
+/// A button that's one of a choice, such as how to sort: the chosen one is
+/// gray with a heavier outline and a bolder label.
+pub(crate) fn toggle(canvas: &mut Canvas, ui: &mut Typesetter, rect: Rect, label: &str, on: bool) {
     frame(canvas, rect);
+    let weight = if on {
+        let (left, top, width, height) = rect.pixels();
+        let inset = 2 * BORDER;
+        canvas.fill(
+            left + inset as i32,
+            top + inset as i32,
+            width.saturating_sub(2 * inset),
+            height.saturating_sub(2 * inset),
+            210,
+        );
+        700.0
+    } else {
+        500.0
+    };
     let size = if label.chars().count() == 1 {
         64.0
     } else {
         LABEL_SIZE
     };
-    let label = fit(ui, label, size, 500.0, rect.width - 24.0);
-    let label_width = ui.label_width(&label, size, 500.0);
+    let label = fit(ui, label, size, weight, rect.width - 24.0);
+    let label_width = ui.label_width(&label, size, weight);
     let x = rect.left + (rect.width - label_width) / 2.0;
     let baseline = rect.top + rect.height / 2.0 + size * 0.33;
-    ui.draw_label(canvas, &label, (x, baseline), size, 500.0);
+    ui.draw_label(canvas, &label, (x, baseline), size, weight);
 }
 
 /// `text`, cut short with an ellipsis if it's wider than `room`.
@@ -139,6 +207,15 @@ mod tests {
     use reader_core::Settings;
 
     use super::*;
+
+    #[test]
+    fn a_row_shares_its_width() {
+        let rects = row(64.0, 10.0, 944.0, 96.0, &[1.0, 2.0, 1.0]);
+        let widths: Vec<f32> = rects.iter().map(|r| r.width).collect();
+        assert_eq!(widths, [228.0, 456.0, 228.0]);
+        assert_eq!(rects[1].left, 64.0 + 228.0 + GAP);
+        assert_eq!(rects[2].right(), 64.0 + 944.0);
+    }
 
     #[test]
     fn long_titles_are_shortened() {

@@ -107,22 +107,20 @@ impl Layout {
         bottom_row.push((Action::Home, "Home", 1.0));
         bottom_row.push((Action::Close, "Close", 1.0));
         bottom_row.push((Action::Exit, "Exit to Nickel", 2.0));
-        let count = bottom_row.len() as f32;
-        let shares: f32 = bottom_row.iter().map(|(_, _, share)| share).sum();
-        let unit = (width - 2.0 * margin - gap * (count - 1.0)) / shares;
-        let mut left = margin;
-        for (action, label, share) in bottom_row {
+        let shares: Vec<f32> = bottom_row.iter().map(|(_, _, share)| *share).collect();
+        let rects = ui::row(
+            margin,
+            top + gap / 2.0,
+            width - 2.0 * margin,
+            button,
+            &shares,
+        );
+        for (rect, (action, label, _)) in rects.into_iter().zip(bottom_row) {
             buttons.push(Button {
-                rect: Rect {
-                    left,
-                    top: top + gap / 2.0,
-                    width: unit * share,
-                    height: button,
-                },
+                rect,
                 action,
                 label,
             });
-            left += unit * share + gap;
         }
         let bottom = top + row + gap;
         Self {

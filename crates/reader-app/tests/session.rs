@@ -13,7 +13,7 @@ use book_format::{
 };
 use reader_app::{
     AUTO_SLEEP, Battery, BookFile, Books, Device, Event, FULL_EVERY, Flow, Light, Refresh,
-    SLEEP_RETRY, SUSPEND_DELAY, Session, Turn,
+    SLEEP_RETRY, SUSPEND_DELAY, Session, Sort, Turn,
 };
 use reader_core::Reader;
 
@@ -564,10 +564,16 @@ fn exit_leaves_from_anywhere_and_saves_the_place() {
 }
 
 /// On the home screen: the book being read, the first cover in the first
-/// row, and Exit to Nickel along the bottom.
+/// row, and Library and Exit to Nickel along the bottom.
 const CURRENT: (f32, f32) = (500.0, 300.0);
 const FIRST_TILE: (f32, f32) = (140.0, 750.0);
-const HOME_EXIT: (f32, f32) = (536.0, 1376.0);
+const HOME_LIBRARY: (f32, f32) = (296.0, 1376.0);
+const HOME_EXIT: (f32, f32) = (776.0, 1376.0);
+/// On the library screen: the first two books, sorting by author, and Home.
+const LIBRARY_FIRST: (f32, f32) = (536.0, 306.0);
+const LIBRARY_SECOND: (f32, f32) = (536.0, 438.0);
+const SORT_AUTHOR: (f32, f32) = (536.0, 172.0);
+const LIBRARY_HOME: (f32, f32) = (198.0, 1376.0);
 /// The menu's Home button, first on the bottom row when there's nowhere to
 /// return to.
 const MENU_HOME: (f32, f32) = (150.0, 6.0 * 120.0 + 60.0);
@@ -651,4 +657,60 @@ fn asleep_at_home_it_wakes_at_home() {
 fn exit_from_home() {
     let mut run = Run::at_home(Fake::default());
     assert_eq!(run.tap(HOME_EXIT.0, HOME_EXIT.1), Flow::Exit);
+}
+
+#[test]
+fn the_library_lists_every_book_by_title_and_opens_one() {
+    let mut run = Run::at_home(Fake::default());
+    run.tap(HOME_LIBRARY.0, HOME_LIBRARY.1);
+    assert!(run.session.in_library());
+    assert_eq!(run.device.shown.last(), Some(&Refresh::Full));
+    // "Other book" comes before "Test book".
+    run.tap(LIBRARY_SECOND.0, LIBRARY_SECOND.1);
+    assert_eq!(run.reader().manifest().title, "Test book");
+    run.tap(MENU.0, MENU.1);
+    run.tap(MENU_HOME.0, MENU_HOME.1);
+    assert!(run.session.at_home());
+    run.tap(HOME_LIBRARY.0, HOME_LIBRARY.1);
+    run.tap(LIBRARY_FIRST.0, LIBRARY_FIRST.1);
+    assert_eq!(run.reader().manifest().title, "Other book");
+}
+
+#[test]
+fn the_library_sort_is_kept_and_home_goes_home() {
+    let mut run = Run::at_home(Fake::default());
+    run.tap(HOME_LIBRARY.0, HOME_LIBRARY.1);
+    let by_title = run.device.last;
+    run.tap(SORT_AUTHOR.0, SORT_AUTHOR.1);
+    assert_eq!(run.session.preferences().library_sort, Sort::Author);
+    assert_ne!(run.device.last, by_title, "the chosen sort is drawn");
+    assert_eq!(run.device.shown.last(), Some(&Refresh::Partial));
+    // Choosing it again changes nothing.
+    let shown = run.device.shown.len();
+    run.tap(SORT_AUTHOR.0, SORT_AUTHOR.1);
+    assert_eq!(run.device.shown.len(), shown);
+    run.tap(LIBRARY_HOME.0, LIBRARY_HOME.1);
+    assert!(run.session.at_home());
+
+    let again = Run::at_home(run.device);
+    assert_eq!(again.session.preferences().library_sort, Sort::Author);
+}
+
+#[test]
+fn asleep_in_the_library_it_wakes_there() {
+    let mut run = Run::at_home(Fake {
+        can_suspend: true,
+        ..Fake::default()
+    });
+    run.tap(HOME_LIBRARY.0, HOME_LIBRARY.1);
+    let library = run.device.last;
+    run.send(Event::Power);
+    run.tick_after(SUSPEND_DELAY);
+    assert_eq!(run.device.suspended, 1);
+    assert!(run.session.in_library());
+    assert_eq!(run.device.last, library);
+    // Turning in the library with one page does nothing.
+    let shown = run.device.shown.len();
+    run.send(Event::Turn(Turn::Next));
+    assert_eq!(run.device.shown.len(), shown);
 }

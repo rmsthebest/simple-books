@@ -1,5 +1,5 @@
-//! Writes what the session shows (the home screen, a page, the menu and the
-//! sleep screen) as PGM images, to look at them without the device.
+//! Writes what the session shows (the home screen, a page, the menu, the
+//! library and the sleep screen) as PGM images, to look at them without the device.
 //!
 //! ```sh
 //! cargo run -p reader-app --example screens -- books-dir out-dir
@@ -117,5 +117,8 @@ fn main() {
     run.tap("menu", 536.0, 60.0);
     // The menu's Home button.
     run.tap("home", 150.0, 780.0);
+    // Library, then sorted by series.
+    run.tap("library", 296.0, 1376.0);
+    run.tap("library-series", 840.0, 172.0);
     run.send("sleep", Event::Power);
 }

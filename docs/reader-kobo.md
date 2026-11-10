@@ -3,7 +3,7 @@
 The reader runs as an app launched from Nickelite, the way KOReader does: it stops
 Nickel, takes over the screen, and starts Nickel again when you leave it. Nickel stays
 installed and untouched. It reads books already in the reader's own format (`.book`),
-and starts on its own home screen; a full library list, search, settings and sync come
+and starts on its own home screen with a library list; search, settings and sync come
 later.
 
 It needs Nickelite installed with its **Commands** permission on, as set up for
@@ -57,7 +57,10 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
 
 - **The home screen** shows the book being read, with its cover and how far through it
   is, then the books read lately and the books added lately. Tap any of them to open it
-  where it was left. **Exit to Nickel** is at the bottom.
+  where it was left. **Library** and **Exit to Nickel** are at the bottom.
+- **The library** lists every book, a screen at a time, sorted by title, author (surname)
+  or series; the choice is kept. **‹** and **›** go through the pages, a tap on a book
+  opens it, and **Home** goes back.
 - **Turn pages** by tapping: the left third of the page goes back, anywhere else goes
   forward. Tap a link to follow it.
 - **The menu** opens with a tap along the top of the page. It has the front light and
