@@ -98,4 +98,12 @@ The [`Dockerfile`](Dockerfile) builds the same image as the releases.
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE).
+[AGPL-3.0-or-later](LICENSE), except for what the Kobo reader brings with it:
+
+- **The English–Swedish dictionary** (`dict-en-sv` on the Kobo) is made from
+  [Folkets lexikon](https://folkets-lexikon.csc.kth.se/folkets/), KTH Royal Institute of
+  Technology, under [CC BY-SA 2.5](https://creativecommons.org/licenses/by-sa/2.5/). See
+  [crates/dictionary/data](crates/dictionary/data/README.md).
+- **The fonts**, [Literata](https://github.com/googlefonts/literata) and
+  [Intel One Mono](https://github.com/intel/intel-one-mono), are under the SIL Open Font
+  License; see [crates/reader-core/fonts](crates/reader-core/fonts).
