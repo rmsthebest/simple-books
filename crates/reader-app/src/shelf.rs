@@ -148,10 +148,10 @@ impl Layout {
         canvas: &mut Canvas,
         ui: &mut Typesetter,
         library: &Library,
-        battery: &str,
+        status: &str,
     ) {
         canvas.clear();
-        ui::header(canvas, ui, "Library", battery);
+        ui::header(canvas, ui, "Library", status);
         for (rect, action, label) in &self.buttons {
             let on = *action == Action::Sort(self.sort);
             ui::toggle(canvas, ui, *rect, label, on);

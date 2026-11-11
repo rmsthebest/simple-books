@@ -157,17 +157,17 @@ impl Layout {
     }
 
     /// Draws the screen. `cover` gives a book's cover picture, if it has
-    /// one; `battery` is shown in the corner.
+    /// one; `status` (the time, Wi-Fi and battery) is shown in the corner.
     pub(crate) fn draw(
         &self,
         canvas: &mut Canvas,
         ui: &mut Typesetter,
         library: &Library,
         cover: &mut dyn FnMut(&Entry) -> Option<Picture>,
-        battery: &str,
+        status: &str,
     ) {
         canvas.clear();
-        ui::header(canvas, ui, "Simple Books", battery);
+        ui::header(canvas, ui, "Simple Books", status);
 
         if let Some((file, rect)) = &self.current
             && let Some(entry) = library.get(file)

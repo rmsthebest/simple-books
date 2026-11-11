@@ -171,6 +171,12 @@ pub trait Device {
     fn save(&mut self, name: &str, bytes: &[u8]);
     /// The time, in seconds since 1970, for when books were last opened.
     fn clock(&mut self) -> u64;
+    /// How far ahead of UTC local time is at `clock`, in seconds, for the
+    /// time in the status. UTC where the platform can't tell.
+    fn utc_offset(&mut self, clock: u64) -> i32 {
+        let _ = clock;
+        0
+    }
     /// Whether switching the device on starts the reader: `None` where
     /// that can't change, as in the emulator.
     fn starts_reader(&mut self) -> Option<bool> {
@@ -370,6 +376,10 @@ pub struct Session<R> {
     usb_declined: bool,
     /// Where settings' Done goes: home, or the book its menu was opened from.
     settings_from: Back,
+    /// When the status shown should next change: at the next minute.
+    status_due: Option<Instant>,
+    /// Whether the status shown says Wi-Fi is up.
+    status_wifi: bool,
 }
 
 impl<R> std::fmt::Debug for Session<R> {
@@ -422,6 +432,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             computer: false,
             usb_declined: false,
             settings_from: Back::Home,
+            status_due: None,
+            status_wifi: false,
         };
         session.go_home(device, Refresh::Full, now);
         Ok(session)
@@ -710,14 +722,14 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let settings = Settings::default();
         let ssh = self.syncer.as_ref().and_then(sync::Syncer::ssh);
         let layout = sync_page::Layout::new(settings.width, settings.height, view, confirming, ssh);
-        let battery = battery_text(device);
+        let status = self.status_text(device, now);
         let clock = device.clock();
         let last = self
             .syncer
             .as_ref()
             .and_then(|syncer| syncer.status.last.as_ref())
             .map(|last| last.shown(clock));
-        layout.draw(&mut self.screen, &mut self.ui, last.as_deref(), &battery);
+        layout.draw(&mut self.screen, &mut self.ui, last.as_deref(), &status);
         device.show(&self.screen, refresh);
         self.guard.refreshing(now + refresh.duration());
         self.mode = Mode::Sync(layout);
@@ -805,6 +817,11 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         }
         if self.syncing() {
             deadline = deadline.min(now + SYNC_CHECK);
+        }
+        if let Some(due) = self.status_due
+            && self.status_band().is_some()
+        {
+            deadline = deadline.min(due);
         }
         deadline
     }
@@ -991,7 +1008,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         self.save(device);
         let settings = Settings::default();
         let layout = home::Layout::new(settings.width, settings.height, &self.library);
-        self.draw_home(&layout, device);
+        self.draw_home(&layout, device, now);
         device.show(&self.screen, refresh);
         self.guard.refreshing(now + refresh.duration());
         self.mode = Mode::Home(layout);
@@ -1008,8 +1025,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let settings = Settings::default();
         let sort = self.preferences.library_sort;
         let layout = shelf::Layout::new(settings.width, settings.height, &self.library, sort, page);
-        let battery = battery_text(device);
-        layout.draw(&mut self.screen, &mut self.ui, &self.library, &battery);
+        let status = self.status_text(device, now);
+        layout.draw(&mut self.screen, &mut self.ui, &self.library, &status);
         device.show(&self.screen, refresh);
         self.guard.refreshing(now + refresh.duration());
         self.mode = Mode::Library(layout);
@@ -1074,8 +1091,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let settings = Settings::default();
         let layout =
             search::Layout::new(settings.width, settings.height, &self.library, query, page);
-        let battery = battery_text(device);
-        layout.draw(&mut self.screen, &mut self.ui, &self.library, &battery);
+        let status = self.status_text(device, now);
+        layout.draw(&mut self.screen, &mut self.ui, &self.library, &status);
         device.show(&self.screen, refresh);
         self.guard.refreshing(now + refresh.duration());
         self.mode = Mode::Search(layout);
@@ -1123,7 +1140,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Mode::Settings(layout) => layout.clone(),
             _ => settings::Layout::new(settings.width, settings.height),
         };
-        let battery = battery_text(device);
+        let status = self.status_text(device, now);
         let preview = self.preview.as_ref().and_then(|(_, page)| page.as_ref());
         layout.draw(
             &mut self.screen,
@@ -1131,7 +1148,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             &self.preferences,
             self.light,
             preview,
-            &battery,
+            &status,
         );
         device.show(&self.screen, refresh);
         self.guard.refreshing(now + refresh.duration());
@@ -1190,8 +1207,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     ) {
         let settings = Settings::default();
         let layout = kobo_page::Layout::new(settings.width, settings.height, state);
-        let battery = battery_text(device);
-        layout.draw(&mut self.screen, &mut self.ui, &battery);
+        let status = self.status_text(device, now);
+        layout.draw(&mut self.screen, &mut self.ui, &status);
         device.show(&self.screen, refresh);
         self.guard.refreshing(now + refresh.duration());
         self.mode = Mode::Kobo(layout);
@@ -1243,9 +1260,74 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         save_json(device, PREFERENCES, &self.preferences);
     }
 
+    /// The status for the bar along the top: the local time, Wi-Fi while
+    /// it's up, and the battery, such as "Wed 11 Nov 11:09 · Wi-Fi · 84%".
+    /// Notes when it should next change.
+    fn status_text(&mut self, device: &mut dyn Device, now: Instant) -> String {
+        let clock = device.clock();
+        let wifi = self.network_up();
+        self.status_due = Some(now + Duration::from_secs(60 - clock % 60));
+        self.status_wifi = wifi;
+        let mut parts = Vec::new();
+        if let Some(time) = local_time(clock, device.utc_offset(clock)) {
+            parts.push(time);
+        }
+        if wifi {
+            parts.push("Wi-Fi".to_owned());
+        }
+        match device.battery() {
+            Some(Battery {
+                percent,
+                charging: true,
+            }) => parts.push(format!("{percent}% ↑")),
+            Some(Battery { percent, .. }) => parts.push(format!("{percent}%")),
+            None => {}
+        }
+        parts.join(" · ")
+    }
+
+    fn network_up(&self) -> bool {
+        self.syncer
+            .as_ref()
+            .is_some_and(|syncer| syncer.setup.network.is_up())
+    }
+
+    /// Where the current screen shows the status, if it does: the top and
+    /// bottom of its band, and the baseline.
+    fn status_band(&self) -> Option<((f32, f32), f32)> {
+        match &self.mode {
+            Mode::Home(_)
+            | Mode::Library(_)
+            | Mode::Search(_)
+            | Mode::Settings(_)
+            | Mode::Kobo(_)
+            | Mode::Sync(_)
+            | Mode::Usb { .. }
+            | Mode::Power { .. } => Some(((0.0, ui::HEADER), ui::HEADER * 0.62)),
+            Mode::Menu(layout) => Some(layout.status_band()),
+            Mode::Reading | Mode::Asleep { .. } => None,
+        }
+    }
+
+    /// Draws the status again where it is, once a minute has passed or
+    /// Wi-Fi has come or gone, leaving the rest of the screen.
+    fn refresh_status(&mut self, device: &mut dyn Device, now: Instant) {
+        let Some(band) = self.status_band() else {
+            self.status_due = None;
+            return;
+        };
+        let due = self.status_due.is_some_and(|due| now >= due);
+        if !due && self.network_up() == self.status_wifi {
+            return;
+        }
+        let text = self.status_text(device, now);
+        ui::status(&mut self.screen, &mut self.ui, &text, band.0, band.1);
+        device.show(&self.screen, Refresh::Partial);
+    }
+
     /// Draws the home screen into `screen`.
-    fn draw_home(&mut self, layout: &home::Layout, device: &mut dyn Device) {
-        let battery = battery_text(device);
+    fn draw_home(&mut self, layout: &home::Layout, device: &mut dyn Device, now: Instant) {
+        let status = self.status_text(device, now);
         let Self {
             library,
             covers,
@@ -1269,7 +1351,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 })
                 .clone()
         };
-        layout.draw(screen, ui, library, &mut cover, &battery);
+        layout.draw(screen, ui, library, &mut cover, &status);
     }
 
     fn reading_tap(
@@ -1360,6 +1442,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             book.collect(device);
         }
         self.sync_news(device, now);
+        self.refresh_status(device, now);
         if matches!(self.mode, Mode::Asleep { .. }) {
             // In case SSH came on after the sleep screen went up.
             self.ssh_off();
@@ -1478,8 +1561,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let back = self.here();
         let settings = Settings::default();
         let layout = usb_page::Layout::new(settings.width, settings.height);
-        let battery = battery_text(device);
-        layout.draw(&mut self.screen, &mut self.ui, &battery);
+        let status = self.status_text(device, now);
+        layout.draw(&mut self.screen, &mut self.ui, &status);
         device.show(&self.screen, Refresh::Full);
         self.guard.refreshing(now + Refresh::Full.duration());
         self.mode = Mode::Usb { layout, back };
@@ -1519,8 +1602,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         self.save(device);
         let back = self.here();
         let layout = power_page::Layout::new(self.screen.width());
-        let battery = battery_text(device);
-        layout.draw(&mut self.screen, &mut self.ui, &battery);
+        let status = self.status_text(device, now);
+        layout.draw(&mut self.screen, &mut self.ui, &status);
         device.show(&self.screen, Refresh::Full);
         self.guard.refreshing(now + Refresh::Full.duration());
         self.mode = Mode::Power {
@@ -1650,7 +1733,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     }
 
     fn draw_menu(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
-        let values = self.menu_values(device);
+        let values = self.menu_values(device, now);
         self.compose_page()?;
         if let Mode::Menu(layout) = &self.mode {
             layout.draw(&mut self.screen, &mut self.ui, &values);
@@ -1663,14 +1746,15 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         Ok(())
     }
 
-    fn menu_values(&self, device: &mut dyn Device) -> menu::Values {
+    fn menu_values(&mut self, device: &mut dyn Device, now: Instant) -> menu::Values {
+        let status = self.status_text(device, now);
         let p = &self.preferences;
         let reader = self.book.as_ref().map(|book| &book.reader);
         menu::Values {
             title: reader
                 .map(|r| r.manifest().title.clone())
                 .unwrap_or_default(),
-            battery: battery_text(device),
+            status,
             light: settings::Setting::Light.value(p, self.light),
             warmth: settings::Setting::Warmth.value(p, self.light),
             text_size: settings::Setting::TextSize.value(p, self.light),
@@ -1767,15 +1851,27 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
 }
 
 /// "84%", "84%, charging", or nothing if the device doesn't say.
-fn battery_text(device: &mut dyn Device) -> String {
-    match device.battery() {
-        Some(Battery {
-            percent,
-            charging: true,
-        }) => format!("{percent}%, charging"),
-        Some(Battery { percent, .. }) => format!("{percent}%"),
-        None => String::new(),
-    }
+/// Such as "Wed 11 Nov 11:09", `offset` seconds ahead of UTC.
+fn local_time(clock: u64, offset: i32) -> Option<String> {
+    use jiff::{
+        Timestamp,
+        tz::{Offset, TimeZone},
+    };
+    const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let at = Timestamp::from_second(i64::try_from(clock).ok()?).ok()?;
+    let zone = TimeZone::fixed(Offset::from_seconds(offset).ok()?);
+    let local = at.to_zoned(zone);
+    let day = DAYS[usize::from(local.weekday().to_monday_zero_offset().unsigned_abs())];
+    let month = MONTHS[usize::from(local.month().unsigned_abs()) - 1];
+    Some(format!(
+        "{day} {} {month} {:02}:{:02}",
+        local.day(),
+        local.hour(),
+        local.minute()
+    ))
 }
 
 fn load_json<T: serde::de::DeserializeOwned>(device: &mut dyn Device, name: &str) -> Option<T> {
@@ -1785,5 +1881,20 @@ fn load_json<T: serde::de::DeserializeOwned>(device: &mut dyn Device, name: &str
 fn save_json<T: Serialize>(device: &mut dyn Device, name: &str, value: &T) {
     if let Ok(bytes) = serde_json::to_vec(value) {
         device.save(name, &bytes);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_local_time_reads_like_a_clock() {
+        // 09:32 UTC, an hour behind Stockholm in November.
+        assert_eq!(
+            local_time(1_794_389_549, 3600).as_deref(),
+            Some("Wed 11 Nov 10:32")
+        );
+        assert_eq!(local_time(0, 0).as_deref(), Some("Thu 1 Jan 00:00"));
     }
 }

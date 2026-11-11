@@ -120,10 +120,10 @@ impl Layout {
         canvas: &mut Canvas,
         ui: &mut Typesetter,
         last: Option<&str>,
-        battery: &str,
+        status: &str,
     ) {
         canvas.clear();
-        ui::header(canvas, ui, "Sync", battery);
+        ui::header(canvas, ui, "Sync", status);
         let mut y = TEXT_TOP;
         self.draw_view(canvas, ui, &mut y);
         if let Some(last) = last

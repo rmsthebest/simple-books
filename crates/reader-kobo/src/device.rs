@@ -36,6 +36,9 @@ pub(crate) struct Kobo {
     pub framebuffer: Framebuffer,
     /// Where the app keeps its files.
     dir: PathBuf,
+    /// Nickel keeps `/etc/localtime` linked to the zone chosen in its
+    /// settings.
+    zone: jiff::tz::TimeZone,
 }
 
 impl std::fmt::Debug for Kobo {
@@ -43,13 +46,22 @@ impl std::fmt::Debug for Kobo {
         f.debug_struct("Kobo")
             .field("framebuffer", &self.framebuffer)
             .field("dir", &self.dir)
+            .field("zone", &self.zone.iana_name())
             .finish()
     }
 }
 
 impl Kobo {
     pub(crate) fn new(framebuffer: Framebuffer, dir: PathBuf) -> Self {
-        Self { framebuffer, dir }
+        let zone = jiff::tz::TimeZone::try_system().unwrap_or_else(|error| {
+            log!("no time zone, so UTC: {error}");
+            jiff::tz::TimeZone::UTC
+        });
+        Self {
+            framebuffer,
+            dir,
+            zone,
+        }
     }
 
     fn charging() -> bool {
@@ -146,6 +158,10 @@ impl Device for Kobo {
             .map_or(0, |since| since.as_secs())
     }
 
+    fn utc_offset(&mut self, clock: u64) -> i32 {
+        utc_offset(&self.zone, clock)
+    }
+
     /// On when `boot` is in the app folder and `/etc/rc.local` runs
     /// `boot.sh`, as `boot-install.sh on` leaves it.
     fn starts_reader(&mut self) -> Option<bool> {
@@ -189,6 +205,14 @@ fn save_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 fn read_number(path: &str) -> Option<u32> {
     fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+/// How far ahead of UTC `zone` is at `clock`, in seconds.
+fn utc_offset(zone: &jiff::tz::TimeZone, clock: u64) -> i32 {
+    i64::try_from(clock)
+        .ok()
+        .and_then(|clock| jiff::Timestamp::from_second(clock).ok())
+        .map_or(0, |at| zone.to_offset(at).seconds())
 }
 
 #[cfg(test)]

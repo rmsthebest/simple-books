@@ -748,6 +748,48 @@ fn asleep_at_home_it_wakes_at_home() {
 }
 
 #[test]
+fn the_time_in_the_status_moves_on_each_minute() {
+    let mut run = Run::at_home(Fake {
+        // 09:32:29 UTC; Fake's clock goes up a second each time it's read.
+        clock: 1_794_389_549,
+        ..Fake::default()
+    });
+    let shown = run.device.shown.len();
+    let home = run.device.last;
+    let due = run.session.deadline(run.now);
+    assert!(due <= run.now + Duration::from_secs(60), "{due:?}");
+    // Nothing to draw before then.
+    run.session
+        .handle(
+            Event::Tick,
+            run.now + Duration::from_secs(1),
+            &mut run.device,
+        )
+        .unwrap();
+    assert_eq!(run.device.shown.len(), shown);
+    run.device.clock += 60;
+    run.now = due;
+    run.session
+        .handle(Event::Tick, run.now, &mut run.device)
+        .unwrap();
+    assert_eq!(run.device.shown[shown..], [Refresh::Partial]);
+    assert_ne!(run.device.last, home, "the new minute is drawn");
+    assert!(run.session.at_home());
+    // Not while reading: no bar there.
+    let mut run = Run::with(Fake {
+        clock: 1_794_389_549,
+        ..Fake::default()
+    });
+    let shown = run.device.shown.len();
+    run.device.clock += 60;
+    run.now += Duration::from_secs(61);
+    run.session
+        .handle(Event::Tick, run.now, &mut run.device)
+        .unwrap();
+    assert_eq!(run.device.shown.len(), shown);
+}
+
+#[test]
 fn home_has_no_way_out_to_nickel() {
     let mut run = Run::at_home(Fake::default());
     // Where Exit to Nickel was, Settings is now.

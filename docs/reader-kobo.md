@@ -96,6 +96,9 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
 - **The home screen** shows the book being read, with its cover and how far through it
   is, then the books read lately and the books added lately. Tap any of them to open it
   where it was left. **Library** and **Settings** are at the bottom.
+- **The bar along the top** of every screen but the page, the menu's included, shows the
+  day and time (in the time zone set in Nickel), **Wi-Fi** while it's on, and the
+  battery, with ↑ while charging. The time moves on each minute.
 - **Settings** has text size, line spacing, margins, darkness, contrast, the light and
   its warmth, and the turn guard, each with − and +, and **Justified** and
   **Hyphenated**. A sample paragraph at the top is laid out as a page would be, so the

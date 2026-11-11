@@ -169,10 +169,10 @@ impl Layout {
         canvas: &mut Canvas,
         ui: &mut Typesetter,
         library: &Library,
-        battery: &str,
+        status: &str,
     ) {
         canvas.clear();
-        ui::header(canvas, ui, "Search", battery);
+        ui::header(canvas, ui, "Search", status);
 
         // The query, with a bar where the next letter goes.
         let content = canvas.width() as f32 - 2.0 * MARGIN;

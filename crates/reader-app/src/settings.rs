@@ -243,10 +243,10 @@ impl Layout {
         p: &Preferences,
         light: Light,
         preview: Option<&Canvas>,
-        battery: &str,
+        status: &str,
     ) {
         canvas.clear();
-        ui::header(canvas, ui, "Settings", battery);
+        ui::header(canvas, ui, "Settings", status);
         if let Some(page) = preview {
             // The page from its top margin down, at its real size and with
             // its side margins, so it looks as a book will.

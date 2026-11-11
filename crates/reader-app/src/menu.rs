@@ -31,8 +31,9 @@ pub(crate) enum Step {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Values {
     pub title: String,
-    /// "84%", "84%, charging", or empty if unknown.
-    pub battery: String,
+    /// The time, Wi-Fi and the battery, as in the bar along the top of
+    /// other screens.
+    pub status: String,
     pub light: String,
     pub warmth: String,
     pub text_size: String,
@@ -145,25 +146,24 @@ impl Layout {
             .map(|b| b.action)
     }
 
+    /// Where the status goes: the title row's top and bottom, and the
+    /// baseline.
+    pub(crate) fn status_band(&self) -> ((f32, f32), f32) {
+        ((0.0, self.row), self.row * 0.62)
+    }
+
     /// Draws the panel over whatever `canvas` holds.
     pub(crate) fn draw(&self, canvas: &mut Canvas, ui: &mut Typesetter, values: &Values) {
         let width = self.width as u32;
         canvas.fill(0, 0, width, self.bottom as u32, 255);
         canvas.fill(0, self.bottom as i32, width, BORDER + 1, 0);
 
-        // The title, shortened to leave room for the battery.
-        let battery_width = ui.label_width(&values.battery, LABEL_SIZE, 400.0);
-        let room = self.width - 2.0 * self.margin - battery_width - 32.0;
+        // The title, shortened to leave room for the status.
+        let room = self.width - 2.0 * self.margin - ui::STATUS_ROOM - 32.0;
         let title = ui::fit(ui, &values.title, TITLE_SIZE, 600.0, room);
-        let baseline = self.row * 0.62;
+        let (band, baseline) = self.status_band();
         ui.draw_label(canvas, &title, (self.margin, baseline), TITLE_SIZE, 600.0);
-        ui.draw_label(
-            canvas,
-            &values.battery,
-            (self.width - self.margin - battery_width, baseline),
-            LABEL_SIZE,
-            400.0,
-        );
+        ui::status(canvas, ui, &values.status, band, baseline);
 
         let shown = [
             &values.light,

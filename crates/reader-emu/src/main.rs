@@ -350,6 +350,8 @@ struct Panel {
     /// Positions, preferences and page maps, in
     /// `$XDG_CACHE_HOME/simple-books-emu`.
     dir: Option<PathBuf>,
+    /// This computer's time zone, for the time in the status.
+    zone: jiff::tz::TimeZone,
 }
 
 impl Panel {
@@ -367,6 +369,7 @@ impl Panel {
                 warmth: 4,
             },
             dir,
+            zone: jiff::tz::TimeZone::try_system().unwrap_or(jiff::tz::TimeZone::UTC),
         }
     }
 
@@ -430,6 +433,13 @@ impl Device for Panel {
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_or(0, |since| since.as_secs())
+    }
+
+    fn utc_offset(&mut self, clock: u64) -> i32 {
+        i64::try_from(clock)
+            .ok()
+            .and_then(|clock| jiff::Timestamp::from_second(clock).ok())
+            .map_or(0, |at| self.zone.to_offset(at).seconds())
     }
 }
 

@@ -12,6 +12,8 @@ publish = false
 workspace = true
 
 [dependencies]
+# The local time zone, for the time in the status: /etc/localtime.
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 book-format = { path = "../book-format" }
 libc = "0.2"
 reader-app = { path = "../reader-app" }

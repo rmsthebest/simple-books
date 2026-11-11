@@ -66,9 +66,9 @@ impl Layout {
             .map(|(_, action, _)| *action)
     }
 
-    pub(crate) fn draw(&self, canvas: &mut Canvas, ui: &mut Typesetter, battery: &str) {
+    pub(crate) fn draw(&self, canvas: &mut Canvas, ui: &mut Typesetter, status: &str) {
         canvas.clear();
-        ui::header(canvas, ui, "Power", battery);
+        ui::header(canvas, ui, "Power", status);
         let room = canvas.width() as f32 - 2.0 * MARGIN;
         let mut y = TEXT_TOP;
         for text in SAID {

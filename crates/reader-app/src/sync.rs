@@ -33,6 +33,11 @@ pub trait Network: Send + Sync {
     /// worked is matched by one of these, and the network stays up while
     /// any job still needs it.
     fn down(&self);
+    /// Whether it's up now, for the status: Wi-Fi shows only on the Kobo,
+    /// where it's off most of the time. Mustn't wait for an `up` under way.
+    fn is_up(&self) -> bool {
+        false
+    }
 }
 
 /// A way in over the network, for working on the device: SSH on the Kobo.

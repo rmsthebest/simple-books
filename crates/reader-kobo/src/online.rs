@@ -8,7 +8,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         Mutex, PoisonError,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -34,6 +34,9 @@ pub(crate) struct Wifi {
     /// waits for the first to connect rather than starting the script
     /// again.
     users: Mutex<u32>,
+    /// Up and usable, for the status, which mustn't wait on `users` while
+    /// the script runs.
+    up: AtomicBool,
 }
 
 impl Wifi {
@@ -41,6 +44,7 @@ impl Wifi {
         Self {
             script: dir.join("wifi.sh"),
             users: Mutex::new(0),
+            up: AtomicBool::new(false),
         }
     }
 }
@@ -55,6 +59,7 @@ impl Network for Wifi {
                 return Err(why);
             }
             log!("Wi-Fi up in {:?}", started.elapsed());
+            self.up.store(true, Ordering::Relaxed);
         }
         *users += 1;
         Ok(())
@@ -64,11 +69,16 @@ impl Network for Wifi {
         let mut users = self.users.lock().unwrap_or_else(PoisonError::into_inner);
         *users = users.saturating_sub(1);
         if *users == 0 {
+            self.up.store(false, Ordering::Relaxed);
             if let Err(why) = run(&self.script, "down") {
                 log!("Wi-Fi didn't go down: {why}");
             }
             log!("Wi-Fi down");
         }
+    }
+
+    fn is_up(&self) -> bool {
+        self.up.load(Ordering::Relaxed)
     }
 }
 

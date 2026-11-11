@@ -79,9 +79,9 @@ impl Layout {
             .map(|(_, action)| *action)
     }
 
-    pub(crate) fn draw(&self, canvas: &mut Canvas, ui: &mut Typesetter, battery: &str) {
+    pub(crate) fn draw(&self, canvas: &mut Canvas, ui: &mut Typesetter, status: &str) {
         canvas.clear();
-        ui::header(canvas, ui, "Kobo", battery);
+        ui::header(canvas, ui, "Kobo", status);
         let room = canvas.width() as f32 - 2.0 * MARGIN;
         let paragraph = |canvas: &mut Canvas, ui: &mut Typesetter, text: &str, mut y: f32| {
             for line in ui::wrap(ui, text, LABEL_SIZE, 400.0, room, 4) {

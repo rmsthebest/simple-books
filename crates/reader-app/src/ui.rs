@@ -76,23 +76,52 @@ pub(crate) fn frame(canvas: &mut Canvas, rect: Rect) {
     );
 }
 
-/// The screen's title on the left of the bar along the top, `right` (such
-/// as the battery) on its right, and a rule under it.
-pub(crate) fn header(canvas: &mut Canvas, ui: &mut Typesetter, title: &str, right: &str) {
+/// The screen's title on the left of the bar along the top, the status
+/// (the time, Wi-Fi and the battery) on its right, and a rule under it.
+pub(crate) fn header(canvas: &mut Canvas, ui: &mut Typesetter, title: &str, status_text: &str) {
     let width = canvas.width() as f32;
     let baseline = HEADER * 0.62;
-    let right_width = ui.label_width(right, LABEL_SIZE, 400.0);
-    let room = width - 2.0 * MARGIN - right_width - 32.0;
+    let room = width - 2.0 * MARGIN - STATUS_ROOM - 32.0;
     let title = fit(ui, title, 44.0, 600.0, room);
     ui.draw_label(canvas, &title, (MARGIN, baseline), 44.0, 600.0);
+    status(canvas, ui, status_text, (0.0, HEADER), baseline);
+    canvas.fill(0, HEADER as i32, width as u32, BORDER, 0);
+}
+
+/// The status's text size.
+const STATUS_SIZE: f32 = 36.0;
+/// The room kept for the status at the right of the bar, enough for "Wed
+/// 30 Sep 23:59 · Wi-Fi · 100% ↑", so a new minute can be drawn over the old
+/// one without touching the title.
+pub(crate) const STATUS_ROOM: f32 = 600.0;
+
+/// Draws the status right-aligned in its room, between `top` and `bottom`
+/// of the bar, clearing what was there.
+pub(crate) fn status(
+    canvas: &mut Canvas,
+    ui: &mut Typesetter,
+    text: &str,
+    (top, bottom): (f32, f32),
+    baseline: f32,
+) {
+    let width = canvas.width() as f32;
+    let left = width - MARGIN - STATUS_ROOM;
+    canvas.fill(
+        left as i32,
+        top as i32,
+        STATUS_ROOM as u32,
+        (bottom - top) as u32,
+        255,
+    );
+    let text = fit(ui, text, STATUS_SIZE, 400.0, STATUS_ROOM);
+    let text_width = ui.label_width(&text, STATUS_SIZE, 400.0);
     ui.draw_label(
         canvas,
-        right,
-        (width - MARGIN - right_width, baseline),
-        LABEL_SIZE,
+        &text,
+        (width - MARGIN - text_width, baseline),
+        STATUS_SIZE,
         400.0,
     );
-    canvas.fill(0, HEADER as i32, width as u32, BORDER, 0);
 }
 
 /// Rectangles side by side from `left`, `width` across between them, each
@@ -231,6 +260,19 @@ mod tests {
         assert_eq!(widths, [228.0, 456.0, 228.0]);
         assert_eq!(rects[1].left, 64.0 + 228.0 + GAP);
         assert_eq!(rects[2].right(), 64.0 + 944.0);
+    }
+
+    #[test]
+    fn the_longest_status_fits_its_room() {
+        let mut ui = Typesetter::new(Settings::default(), Some("en"));
+        let width = ui.label_width("Wed 30 Sep 23:59 · Wi-Fi · 100% ↑", STATUS_SIZE, 400.0);
+        assert!(width <= STATUS_ROOM, "{width}");
+        // And the longest title still fits beside it.
+        let title = ui.label_width("Simple Books", 44.0, 600.0);
+        assert!(
+            title <= 1072.0 - 2.0 * MARGIN - STATUS_ROOM - 32.0,
+            "{title}"
+        );
     }
 
     #[test]
