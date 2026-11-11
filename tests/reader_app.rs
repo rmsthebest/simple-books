@@ -183,7 +183,6 @@ fn start(dir: &Path, url: &str, device: &mut Disk) -> Session<fs::File> {
             updates: false,
         },
         device,
-        Instant::now(),
     );
     session
 }
