@@ -239,11 +239,11 @@ impl Run {
     }
 }
 
-/// The middle of the page, away from links and the menu band.
-const FORWARD: (f32, f32) = (800.0, 900.0);
+/// The right and left thirds, which turn, and the middle one, which opens
+/// the menu; away from links.
+const FORWARD: (f32, f32) = (900.0, 900.0);
 const BACK: (f32, f32) = (100.0, 900.0);
-/// The top band, which opens the menu.
-const MENU: (f32, f32) = (536.0, 60.0);
+const MENU: (f32, f32) = (536.0, 900.0);
 /// Darkness's − and + buttons, on the fifth row.
 const DARKER: (f32, f32) = (1072.0 - 64.0 - 52.0, 4.0 * 120.0 + 60.0);
 const LIGHTER: (f32, f32) = (1072.0 - 64.0 - 104.0 - 260.0 + 52.0, 4.0 * 120.0 + 60.0);
@@ -295,6 +295,22 @@ fn a_second_tap_too_soon_is_ignored() {
         .unwrap();
     assert_eq!(run.page(), page);
     assert_eq!(run.session.ignored_turns(), 1);
+}
+
+#[test]
+fn the_page_is_in_thirds_back_menu_forward() {
+    let mut run = Run::new();
+    let start = run.page().unwrap();
+    // The top of the right third turns, as everywhere in it: there's no
+    // band along the top for the menu any more.
+    run.tap(1000.0, 40.0);
+    assert!(!run.session.in_menu());
+    assert!(run.page().unwrap() > start);
+    run.tap(300.0, 1400.0);
+    assert_eq!(run.page().unwrap(), start);
+    run.tap(400.0, 40.0);
+    assert!(run.session.in_menu());
+    assert_eq!(run.page().unwrap(), start, "opening the menu doesn't turn");
 }
 
 #[test]

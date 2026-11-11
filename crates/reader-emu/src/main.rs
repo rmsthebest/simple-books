@@ -28,9 +28,9 @@
 //!
 //! It runs the same [`Session`] as the Kobo, with the mouse as the finger:
 //!
-//! - Click the left third of the page to go back a page, and elsewhere to go
-//!   forward. Click a link to follow it, and the top of the page for the
-//!   menu. On the home screen, click a cover to open its book.
+//! - Click the left third of the page to go back a page, the right third to
+//!   go forward, and the middle third for the menu. Click a link to follow
+//!   it. On the home screen, click a cover to open its book.
 //! - ← and Page Up go back, → Page Down and Space forward, and Backspace
 //!   returns from a link. `P` is the power button, and `O` holds it down.
 //! - `+` and `-` change the text size, `H` toggles hyphenation, `J`

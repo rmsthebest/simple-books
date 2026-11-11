@@ -108,9 +108,9 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
 - **Search**, from the library, has an on-screen keyboard with å, ä and ö. The books
   whose title, authors or series hold every word typed show as you type, ignoring case
   and accents, so "hjarna" finds "Hjärna". Titles starting with what's typed come first.
-- **Turn pages** by tapping: the left third of the page goes back, anywhere else goes
+- **Turn pages** by tapping: the left third of the page goes back, the right third goes
   forward. Tap a link to follow it.
-- **The menu** opens with a tap along the top of the page. It has the front light and
+- **The menu** opens with a tap in the middle third of the page. It has the front light and
   warmth, text size, darkness and contrast, **Return** after following a link, **Home**,
   **Close** and **Exit to Nickel**. Tap below it to close it.
 - **Sync**, from Settings, pairs the reader with your library: tap **Pair**, then on the

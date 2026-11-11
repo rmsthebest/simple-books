@@ -12,11 +12,11 @@
 //! through [`Device`]. Between events it waits until
 //! [`Session::deadline`] and then sends [`Event::Tick`].
 //!
-//! - **Turning:** a tap in the left third goes back a page, anywhere else
-//!   forward, and a tap on a link follows it. The [`TurnGuard`] drops turns
+//! - **Turning:** a tap in the left third goes back a page, one in the
+//!   right third forward, and a tap on a link follows it. The [`TurnGuard`] drops turns
 //!   that come too soon. Turns use the grey partial refresh, with a full one
 //!   every [`FULL_EVERY`] turns to clear ghosting.
-//! - **The menu** opens with a tap along the top of the page. It has the
+//! - **The menu** opens with a tap in the middle third. It has the
 //!   front light, warmth, text size, darkness and contrast, a way back from
 //!   a link, and the way out to Nickel.
 //! - **Sleep:** the power button, or [`AUTO_SLEEP`] without a touch, saves
@@ -86,9 +86,6 @@ pub const SLEEP_RETRY: Duration = Duration::from_secs(5);
 const BACKGROUND_CHECK: Duration = Duration::from_secs(1);
 /// The place is saved every this many turns, besides on sleep and exit.
 const SAVE_EVERY: u32 = 10;
-/// A tap this far down the screen, as a fraction of its height, opens the
-/// menu.
-const MENU_BAND: f32 = 0.1;
 /// On waking, it syncs if it hasn't for this long.
 pub const SYNC_EVERY: Duration = Duration::from_mins(30);
 /// While a sync runs, the session looks for news this often.
@@ -438,6 +435,11 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     /// Whether the home screen is up.
     pub fn at_home(&self) -> bool {
         matches!(self.mode, Mode::Home(_))
+    }
+
+    /// Whether the book's menu is up.
+    pub fn in_menu(&self) -> bool {
+        matches!(self.mode, Mode::Menu(_))
     }
 
     /// Whether the settings screen is up.
@@ -1265,10 +1267,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let Some(book) = self.book.as_mut() else {
             return Ok(());
         };
-        let (width, height) = (
-            book.reader.settings().width as f32,
-            book.reader.settings().height as f32,
-        );
+        let width = book.reader.settings().width as f32;
         if let Some(target) = book.reader.link_at(x, y) {
             if self.guard.allow(now) {
                 book.reader.follow(target)?;
@@ -1277,10 +1276,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             } else {
                 self.ignored += 1;
             }
-        } else if y < height * MENU_BAND {
-            self.open_menu(device, now)?;
         } else if x < width / 3.0 {
             self.turn(Turn::Previous, now, device)?;
+        } else if x < width * 2.0 / 3.0 {
+            self.open_menu(device, now)?;
         } else {
             self.turn(Turn::Next, now, device)?;
         }
