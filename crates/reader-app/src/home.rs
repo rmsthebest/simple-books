@@ -32,7 +32,6 @@ pub(crate) enum Action {
     Open(String),
     Library,
     Settings,
-    Exit,
 }
 
 #[derive(Debug, Clone)]
@@ -124,17 +123,10 @@ impl Layout {
             top = covers_top + tile_height + ROW_TITLE + ROW_SPACE;
         }
 
-        let bottom = ui::row(
-            MARGIN,
-            buttons_top,
-            content,
-            BUTTON_HEIGHT,
-            &[1.0, 1.0, 1.5],
-        );
+        let bottom = ui::row(MARGIN, buttons_top, content, BUTTON_HEIGHT, &[1.0, 1.0]);
         let buttons = vec![
             (bottom[0], Action::Library, "Library"),
             (bottom[1], Action::Settings, "Settings"),
-            (bottom[2], Action::Exit, "Exit to Nickel"),
         ];
         Self {
             width,

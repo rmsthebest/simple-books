@@ -342,18 +342,40 @@ fn the_menu_changes_the_light_and_closes_with_a_full_refresh() {
 }
 
 #[test]
-fn exit_saves_the_place_and_the_next_start_returns_to_it() {
+fn settings_from_the_menu_returns_to_the_book_laid_out_anew() {
     let mut run = Run::new();
     for _ in 0..3 {
         run.tap(FORWARD.0, FORWARD.1);
     }
     let page = run.page();
     run.tap(MENU.0, MENU.1);
-    // Exit to Nickel is the last button on the bottom row.
-    assert_eq!(
-        run.tap(1072.0 - 64.0 - 100.0, 6.0 * 120.0 + 60.0),
-        Flow::Exit
-    );
+    run.tap(MENU_SETTINGS.0, MENU_SETTINGS.1);
+    assert!(run.session.in_settings());
+    // Line spacing up, then the Sync page and back, then Done.
+    let (x, y) = setting(LINE_SPACING, true);
+    run.tap(x, y);
+    run.tap(SETTINGS_SYNC.0, SETTINGS_SYNC.1);
+    run.tap(SYNC_BACK.0, SYNC_BACK.1);
+    assert!(run.session.in_settings());
+    run.tap(SETTINGS_DONE.0, SETTINGS_DONE.1);
+    assert!(!run.session.in_settings() && !run.session.at_home());
+    assert!(run.reader().settings().line_height > 1.4);
+    // Back on the page, near where it was: tapping the middle opens the menu.
+    assert_eq!(run.page().unwrap().chapter, page.unwrap().chapter);
+    run.tap(MENU.0, MENU.1);
+    assert!(run.session.in_menu());
+}
+
+#[test]
+fn exit_saves_the_place_and_the_next_start_returns_to_it() {
+    let mut run = Run::new();
+    for _ in 0..3 {
+        run.tap(FORWARD.0, FORWARD.1);
+    }
+    let page = run.page();
+    // Nickel is on the power screen now, not in the menu.
+    run.send(Event::PowerHeld);
+    assert_eq!(run.tap(POWER_NICKEL.0, POWER_NICKEL.1), Flow::Exit);
     let again = Run::with(Fake {
         files: run.device.files.clone(),
         ..Fake::default()
@@ -544,8 +566,9 @@ fn a_link_goes_there_and_the_menu_returns() {
     run.tap(link.0, link.1);
     assert_eq!(run.page().map(|p| p.chapter), Some(1));
     run.tap(MENU.0, MENU.1);
-    // With somewhere to return to, Return is the first of the bottom row.
-    run.tap(64.0 + 100.0, 6.0 * 120.0 + 60.0);
+    // With somewhere to return to, Return is second on the bottom row,
+    // after Close.
+    run.tap(390.0, 6.0 * 120.0 + 60.0);
     assert_eq!(run.page(), page);
 }
 
@@ -592,12 +615,11 @@ fn exit_leaves_from_anywhere_and_saves_the_place() {
 }
 
 /// On the home screen: the book being read, the first cover in the first
-/// row, and Library and Exit to Nickel along the bottom.
+/// row, and Library and Settings along the bottom.
 const CURRENT: (f32, f32) = (500.0, 300.0);
 const FIRST_TILE: (f32, f32) = (140.0, 750.0);
-const HOME_LIBRARY: (f32, f32) = (194.0, 1376.0);
-const HOME_SETTINGS: (f32, f32) = (471.0, 1376.0);
-const HOME_EXIT: (f32, f32) = (812.0, 1376.0);
+const HOME_LIBRARY: (f32, f32) = (296.0, 1376.0);
+const HOME_SETTINGS: (f32, f32) = (776.0, 1376.0);
 /// On the settings screen: a row's − or +, the toggles, and Done.
 fn setting(row: u8, up: bool) -> (f32, f32) {
     let x = if up { 967.0 } else { 926.0 - 180.0 - 41.0 };
@@ -607,7 +629,12 @@ const LINE_SPACING: u8 = 1;
 const LIGHT: u8 = 5;
 const TURN_GUARD: u8 = 7;
 const JUSTIFIED: (f32, f32) = (296.0, 1253.0);
-const SETTINGS_DONE: (f32, f32) = (776.0, 1376.0);
+/// Done, Sync and Kobo along the bottom.
+const SETTINGS_DONE: (f32, f32) = (216.0, 1376.0);
+const SETTINGS_SYNC: (f32, f32) = (536.0, 1376.0);
+const SETTINGS_KOBO: (f32, f32) = (856.0, 1376.0);
+/// The sync page's Back, on the left of its bottom row.
+const SYNC_BACK: (f32, f32) = (150.0, 1376.0);
 /// On the library screen: the first two books, sorting by author, and Home.
 const LIBRARY_FIRST: (f32, f32) = (536.0, 306.0);
 const LIBRARY_SECOND: (f32, f32) = (536.0, 438.0);
@@ -640,9 +667,10 @@ fn key(letter: char) -> (f32, f32) {
     (x, y)
 }
 const LIBRARY_HOME: (f32, f32) = (198.0, 1376.0);
-/// The menu's Home button, first on the bottom row when there's nowhere to
-/// return to.
-const MENU_HOME: (f32, f32) = (150.0, 6.0 * 120.0 + 60.0);
+/// The menu's bottom row: Close, Return (after a link), Home and Settings.
+/// Home's spot is inside it with or without Return.
+const MENU_HOME: (f32, f32) = (560.0, 6.0 * 120.0 + 60.0);
+const MENU_SETTINGS: (f32, f32) = (900.0, 6.0 * 120.0 + 60.0);
 
 #[test]
 fn it_starts_at_home_with_the_books_listed() {
@@ -720,9 +748,11 @@ fn asleep_at_home_it_wakes_at_home() {
 }
 
 #[test]
-fn exit_from_home() {
+fn home_has_no_way_out_to_nickel() {
     let mut run = Run::at_home(Fake::default());
-    assert_eq!(run.tap(HOME_EXIT.0, HOME_EXIT.1), Flow::Exit);
+    // Where Exit to Nickel was, Settings is now.
+    assert_eq!(run.tap(900.0, 1376.0), Flow::Continue);
+    assert!(run.session.in_settings());
 }
 
 #[test]
@@ -1008,7 +1038,6 @@ impl Ssh for Shared {
     }
 }
 
-const SETTINGS_SYNC: (f32, f32) = (296.0, 1376.0);
 const SYNC_SSH: (f32, f32) = (536.0, 1256.0);
 
 /// On the sync screen, with no server known and SSH from `online`.
@@ -1220,7 +1249,6 @@ fn held_on_the_sleep_screen_it_asks_and_cancel_goes_back_to_the_page() {
 }
 
 /// From settings: the Kobo screen.
-const SETTINGS_KOBO: (f32, f32) = (536.0, 1376.0);
 const KOBO_START_HERE: (f32, f32) = (536.0, 482.0);
 const KOBO_UNINSTALL: (f32, f32) = (536.0, 878.0);
 const KOBO_BACK: (f32, f32) = (536.0, 1376.0);
@@ -1254,6 +1282,9 @@ fn uninstalling_takes_a_second_tap_and_saves_the_place() {
     run.device
         .files
         .retain(|name, _| !name.starts_with("position-"));
+    assert_eq!(run.tap(KOBO_UNINSTALL.0, KOBO_UNINSTALL.1), Flow::Continue);
+    // A tap elsewhere takes the first one back.
+    run.tap(536.0, 1100.0);
     assert_eq!(run.tap(KOBO_UNINSTALL.0, KOBO_UNINSTALL.1), Flow::Continue);
     assert_eq!(run.tap(KOBO_UNINSTALL.0, KOBO_UNINSTALL.1), Flow::Uninstall);
     assert!(run.device.files.keys().any(|k| k.starts_with("position-")));

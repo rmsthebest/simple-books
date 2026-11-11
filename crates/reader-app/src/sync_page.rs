@@ -60,12 +60,13 @@ impl Layout {
     ) -> Self {
         let (width, height) = (width as f32, height as f32);
         let content = width - 2.0 * MARGIN;
-        let mut row: Vec<(Action, &'static str, f32)> = match &view {
-            View::NoServer => Vec::new(),
-            View::Unpaired { .. } => vec![(Action::Pair, "Pair", 1.0)],
-            View::Paired { .. } => vec![
-                (Action::SyncNow, "Sync now", 1.0),
-                (
+        // Back on the left, going ahead on the right (see ui).
+        let mut row: Vec<(Action, &'static str, f32)> = vec![(Action::Back, "Back", 1.0)];
+        match &view {
+            View::NoServer => {}
+            View::Unpaired { .. } => row.push((Action::Pair, "Pair", 1.0)),
+            View::Paired { .. } => {
+                row.push((
                     Action::Unpair,
                     if confirming {
                         "Tap again to unpair"
@@ -73,11 +74,11 @@ impl Layout {
                         "Unpair"
                     },
                     1.0,
-                ),
-            ],
-            View::Busy(_) => vec![(Action::Stop, "Stop", 1.0)],
-        };
-        row.push((Action::Back, "Back", 1.0));
+                ));
+                row.push((Action::SyncNow, "Sync now", 1.0));
+            }
+            View::Busy(_) => row.push((Action::Stop, "Stop", 1.0)),
+        }
         let shares: Vec<f32> = row.iter().map(|(_, _, share)| *share).collect();
         let top = height - BUTTON_HEIGHT - 24.0;
         let rects = ui::row(MARGIN, top, content, BUTTON_HEIGHT, &shares);

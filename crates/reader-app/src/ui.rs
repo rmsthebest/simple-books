@@ -1,5 +1,10 @@
 //! What the menu, the home screen and the library draw with: rectangles,
 //! outlined buttons, and text shortened or wrapped to fit.
+//!
+//! Where buttons go: in a row, the way back or out (Back, Done, Close, Not
+//! now, Home) is on the left and the step forward (Pair, Sync now, Connect,
+//! Settings) on the right. In a column, the way out is at the bottom, as on
+//! the power and Kobo screens.
 
 use reader_core::{Canvas, Typesetter};
 

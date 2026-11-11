@@ -95,7 +95,7 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
 
 - **The home screen** shows the book being read, with its cover and how far through it
   is, then the books read lately and the books added lately. Tap any of them to open it
-  where it was left. **Library**, **Settings** and **Exit to Nickel** are at the bottom.
+  where it was left. **Library** and **Settings** are at the bottom.
 - **Settings** has text size, line spacing, margins, darkness, contrast, the light and
   its warmth, and the turn guard, each with − and +, and **Justified** and
   **Hyphenated**. A sample paragraph at the top is laid out as a page would be, so the
@@ -111,8 +111,9 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
 - **Turn pages** by tapping: the left third of the page goes back, the right third goes
   forward. Tap a link to follow it.
 - **The menu** opens with a tap in the middle third of the page. It has the front light and
-  warmth, text size, darkness and contrast, **Return** after following a link, **Home**,
-  **Close** and **Exit to Nickel**. Tap below it to close it.
+  warmth, text size, darkness and contrast, and along the bottom **Close**, **Return**
+  after following a link, **Home** and **Settings**. **Done** in Settings comes back to
+  the book. Tap below the menu to close it.
 - **Sync**, from Settings, pairs the reader with your library: tap **Pair**, then on the
   website's Kobo page, sign in and type the code shown. The library downloads in the
   background, and you can carry on reading. Then it syncs at start, on waking once half
@@ -130,7 +131,7 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   Powering off leaves "Switched off" on the screen; hold the power button to switch it
   on again. If nothing is tapped for 15 seconds it goes to Nickel, so holding the button
   is still the way out when taps don't work.
-- **Leave** with **Exit to Nickel** in the menu or on the power screen. To come back
+- **Leave** with **Go to Nickel** on the power screen. To come back
   from Nickel, restart the Kobo: hold the power button, choose **Power off**, and switch
   it on again.
 - **The Kobo screen**, from Settings, has **Start Simple Books when switched on** and

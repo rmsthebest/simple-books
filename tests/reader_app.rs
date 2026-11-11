@@ -136,10 +136,11 @@ fn tap(session: &mut Session<fs::File>, device: &mut Disk, (x, y): (f32, f32)) {
         .unwrap();
 }
 
-const HOME_SETTINGS: (f32, f32) = (471.0, 1376.0);
-const SETTINGS_SYNC: (f32, f32) = (296.0, 1376.0);
-/// Pair, or Sync now once paired: the first button along the bottom.
-const SYNC_FIRST: (f32, f32) = (200.0, 1376.0);
+const HOME_SETTINGS: (f32, f32) = (776.0, 1376.0);
+const SETTINGS_SYNC: (f32, f32) = (536.0, 1376.0);
+/// Pair, or Sync now once paired: the last button along the bottom, with
+/// Back first.
+const SYNC_GO: (f32, f32) = (900.0, 1376.0);
 
 /// Opens `file` and turns four pages. Returns where it got to.
 fn read_a_little(session: &mut Session<fs::File>, device: &mut Disk, file: &str) -> Position {
@@ -155,14 +156,14 @@ fn read_a_little(session: &mut Session<fs::File>, device: &mut Disk, file: &str)
     here
 }
 
-/// From an open book: the menu, Home, Settings, Sync, then Sync now.
+/// From an open book: the menu (the middle of the page), its Settings
+/// (last on its bottom row), Sync, then Sync now.
 async fn sync_from_the_book(session: &mut Session<fs::File>, device: &mut Disk) {
-    tap(session, device, (536.0, 60.0));
-    tap(session, device, (178.0, 780.0));
-    assert!(session.at_home(), "home, to reach Sync now");
-    tap(session, device, HOME_SETTINGS);
+    tap(session, device, (536.0, 900.0));
+    tap(session, device, (900.0, 780.0));
+    assert!(session.in_settings(), "settings, to reach Sync now");
     tap(session, device, SETTINGS_SYNC);
-    tap(session, device, SYNC_FIRST);
+    tap(session, device, SYNC_GO);
     until(session, device, "a sync", |s| !s.syncing()).await;
 }
 
@@ -203,7 +204,7 @@ async fn pairing_then_books_and_places_go_back_and_forth() {
     tap(&mut session, &mut device, HOME_SETTINGS);
     tap(&mut session, &mut device, SETTINGS_SYNC);
     assert!(session.in_sync());
-    tap(&mut session, &mut device, SYNC_FIRST);
+    tap(&mut session, &mut device, SYNC_GO);
     until(&mut session, &mut device, "a code", |s| {
         s.pairing_code().is_some()
     })
@@ -268,7 +269,7 @@ async fn pairing_then_books_and_places_go_back_and_forth() {
         )
         .await
         .unwrap();
-    tap(&mut session, &mut device, SYNC_FIRST);
+    tap(&mut session, &mut device, SYNC_GO);
     until(&mut session, &mut device, "a sync", |s| !s.syncing()).await;
     assert_eq!(session.last_sync(), Some("1 place from elsewhere."));
     session

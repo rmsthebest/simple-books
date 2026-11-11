@@ -18,7 +18,8 @@
 //!   every [`FULL_EVERY`] turns to clear ghosting.
 //! - **The menu** opens with a tap in the middle third. It has the
 //!   front light, warmth, text size, darkness and contrast, a way back from
-//!   a link, and the way out to Nickel.
+//!   a link, and [`settings`], which return to the book. The way out to
+//!   Nickel is on the power screen ([`power_page`]), held power button.
 //! - **Sleep:** the power button, or [`AUTO_SLEEP`] without a touch, saves
 //!   the place and suspends, except while charging, which can hang the
 //!   Clara BW's kernel.
@@ -367,6 +368,8 @@ pub struct Session<R> {
     computer: bool,
     /// Not now was tapped since it was plugged in, so don't ask again.
     usb_declined: bool,
+    /// Where settings' Done goes: home, or the book its menu was opened from.
+    settings_from: Back,
 }
 
 impl<R> std::fmt::Debug for Session<R> {
@@ -418,6 +421,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             syncer: None,
             computer: false,
             usb_declined: false,
+            settings_from: Back::Home,
         };
         session.go_home(device, Refresh::Full, now);
         Ok(session)
@@ -859,7 +863,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Event::Tap { x, y } if in_library => self.library_tap(x, y, now, device)?,
             Event::Turn(turn) if in_library => self.library_page(turn, now, device),
             Event::Tap { x, y } if in_search => self.search_tap(x, y, now, device)?,
-            Event::Tap { x, y } if in_settings => self.settings_tap(x, y, now, device),
+            Event::Tap { x, y } if in_settings => self.settings_tap(x, y, now, device)?,
             Event::Tap { x, y } if in_kobo => return Ok(self.kobo_tap(x, y, now, device)),
             Event::Tap { x, y } if in_sync => self.sync_tap(x, y, now, device),
             Event::Tap { x, y } if in_usb => return self.usb_tap(x, y, now, device),
@@ -973,10 +977,9 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         match layout.hit(x, y) {
             Some(home::Action::Open(file)) => self.open(&file, device, now)?,
             Some(home::Action::Library) => self.show_library(0, device, Refresh::Full, now),
-            Some(home::Action::Settings) => self.show_settings(device, Refresh::Full, now),
-            Some(home::Action::Exit) => {
-                self.save(device);
-                return Ok(Flow::Exit);
+            Some(home::Action::Settings) => {
+                self.settings_from = Back::Home;
+                self.show_settings(device, Refresh::Full, now);
             }
             None => {}
         }
@@ -1137,15 +1140,21 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
 
     /// A step or a toggle is saved at once; the open book is laid out with
     /// the new settings when it's next shown.
-    fn settings_tap(&mut self, x: f32, y: f32, now: Instant, device: &mut dyn Device) {
+    fn settings_tap(
+        &mut self,
+        x: f32,
+        y: f32,
+        now: Instant,
+        device: &mut dyn Device,
+    ) -> Result<(), AppError> {
         let Mode::Settings(layout) = &self.mode else {
-            return;
+            return Ok(());
         };
         match layout.hit(x, y) {
             Some(settings::Action::Step(setting, step)) => {
                 let changed = setting.step(step, &mut self.preferences, &mut self.light);
                 if changed == settings::Changed::Nothing {
-                    return;
+                    return Ok(());
                 }
                 self.setting_changed(changed, device);
                 self.show_settings(device, Refresh::Partial, now);
@@ -1163,9 +1172,13 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 };
                 self.show_kobo(state, device, Refresh::Full, now);
             }
-            Some(settings::Action::Done) => self.go_home(device, Refresh::Full, now),
+            Some(settings::Action::Done) => {
+                let back = std::mem::replace(&mut self.settings_from, Back::Home);
+                self.go_back(back, device, now)?;
+            }
             None => {}
         }
+        Ok(())
     }
 
     fn show_kobo(
@@ -1207,6 +1220,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 self.show_settings(device, Refresh::Full, now);
                 return Flow::Continue;
             }
+            // A tap anywhere else takes back an Uninstall not yet confirmed.
+            None if state.confirming => state.confirming = false,
             None => return Flow::Continue,
         }
         self.show_kobo(state, device, Refresh::Partial, now);
@@ -1410,6 +1425,13 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     ) -> Result<(), AppError> {
         match back {
             Back::Reading if self.book.is_some() => {
+                // Settings may have changed how pages look since.
+                let settings = self.preferences.settings();
+                if let Some(book) = self.book.as_mut()
+                    && *book.reader.settings() != settings
+                {
+                    book.relayout(&settings, device)?;
+                }
                 self.mode = Mode::Reading;
                 return self.show_page(device, Refresh::Full, now);
             }
@@ -1675,9 +1697,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             None => {}
             Some(menu::Action::Close) => self.close_menu(device, now)?,
             Some(menu::Action::Home) => self.go_home(device, Refresh::Full, now),
-            Some(menu::Action::Exit) => {
+            Some(menu::Action::Settings) => {
                 self.save(device);
-                return Ok(Flow::Exit);
+                self.settings_from = Back::Reading;
+                self.show_settings(device, Refresh::Full, now);
             }
             Some(menu::Action::Return) => {
                 if let Some(book) = self.book.as_mut() {

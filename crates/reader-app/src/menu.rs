@@ -1,5 +1,5 @@
-//! The menu: a panel over the top of the page, opened by tapping the top of
-//! the screen. Each row is about a centimetre tall on the Clara BW, so it's
+//! The menu: a panel over the top of the page, opened by tapping the
+//! middle of the page. Each row is about a centimetre tall on the Clara BW, so it's
 //! easy to hit.
 
 use reader_core::{Canvas, Typesetter};
@@ -18,7 +18,7 @@ pub(crate) enum Action {
     Return,
     Home,
     Close,
-    Exit,
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,14 +99,14 @@ impl Layout {
             }
             top += row;
         }
-        // Each button's share of the row: the long label gets two.
+        // Each button's share of the row; the way out on the left (see ui).
         let mut bottom_row: Vec<(Action, &'static str, f32)> = Vec::new();
+        bottom_row.push((Action::Close, "Close", 1.0));
         if can_return {
             bottom_row.push((Action::Return, "Return", 1.0));
         }
         bottom_row.push((Action::Home, "Home", 1.0));
-        bottom_row.push((Action::Close, "Close", 1.0));
-        bottom_row.push((Action::Exit, "Exit to Nickel", 2.0));
+        bottom_row.push((Action::Settings, "Settings", 1.3));
         let shares: Vec<f32> = bottom_row.iter().map(|(_, _, share)| *share).collect();
         let rects = ui::row(
             margin,
