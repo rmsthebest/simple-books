@@ -59,6 +59,8 @@ impl Network for Wifi {
                 return Err(why);
             }
             log!("Wi-Fi up in {:?}", started.elapsed());
+            // Before anything uses HTTPS, which a wrong clock breaks.
+            crate::clock::fix_if_wrong();
             self.up.store(true, Ordering::Relaxed);
         }
         *users += 1;

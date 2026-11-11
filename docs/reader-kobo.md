@@ -172,6 +172,12 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   once the screen has finished with the panel. Press the power button again to wake. It doesn't sleep while plugged in, since
   that can hang the Clara BW's kernel; it stays on the sleep screen and sleeps once
   unplugged.
+- **The battery:** at 3%, unless it's charging, the reader saves your place, says
+  "Battery empty" and switches the Kobo off, as Nickel does, rather than run until the
+  storage could be left half written. Charge it, then hold the power button. At 10% or
+  less it doesn't turn Wi-Fi on by itself (syncing on waking, or sending your place on
+  sleeping), and **Update** waits for the charger; **Sync now** still works.
+- **The light** beside the power button is on while the Kobo charges.
 
 ## Which server, and Wi-Fi
 
@@ -308,7 +314,9 @@ So updating a Kobo is updating the server: a new image has the new Kobo files bu
 - **The screen freezes:** hold the power button until the Kobo restarts. Nickel starts as
   usual, even when booting into the reader is on. This didn't erase anything in tests.
 - **Sync fails:** the Sync screen says what went wrong. "Couldn't reach the server" with
-  Wi-Fi working may mean the Kobo's clock is wrong, which breaks HTTPS.
+  Wi-Fi working may mean the Kobo's clock is wrong, which breaks HTTPS. A clock from
+  before November 2026, as a flat battery leaves it, is set from `pool.ntp.org` each
+  time Wi-Fi comes up, and `reader.log` says how that went.
 - **Nickel misbehaves after an install:** put a file called `no-plugin` in
   `.adds/simple-books/` over USB, and restart. The plugin then does nothing.
 - **Remove it:** **Uninstall Simple Books** on the reader's Kobo screen, tapped twice.

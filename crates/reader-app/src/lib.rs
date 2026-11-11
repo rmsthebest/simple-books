@@ -34,6 +34,10 @@
 //!   starting, on waking once [`SYNC_EVERY`] has passed, and when asked on
 //!   the sync screen ([`sync_page`]), from settings. Going to sleep sends
 //!   any new places first, and nothing else.
+//! - **Battery:** at [`BATTERY_EMPTY`] or below, and not charging, it saves
+//!   the place, says the battery is empty and switches off, as Nickel does,
+//!   before the storage can be left half written. At [`BATTERY_LOW`] or
+//!   below it doesn't turn Wi-Fi on by itself, and doesn't update.
 #![forbid(unsafe_code)]
 #![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
@@ -105,6 +109,16 @@ pub const SLEEP_SEND_LONGEST: Duration = Duration::from_secs(60);
 pub const SYNC_EVERY: Duration = Duration::from_mins(30);
 /// While a sync runs, the session looks for news this often.
 const SYNC_CHECK: Duration = Duration::from_millis(500);
+/// At or below this, and not charging, it switches itself off. About half
+/// an hour of reading is left, and the gauge's 0% is still well above
+/// where the Kobo browns out.
+pub const BATTERY_EMPTY: u8 = 3;
+/// At or below this, and not charging, it doesn't sync by itself or send
+/// places on sleeping, and Update waits for the charger. Sync now still
+/// works.
+pub const BATTERY_LOW: u8 = 10;
+/// While awake, the battery is checked this often.
+pub const BATTERY_CHECK: Duration = Duration::from_mins(1);
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -439,6 +453,9 @@ pub struct Session<R> {
     /// so sleeping again doesn't decode it again. `None` for a book
     /// without one.
     sleep_cover: Option<(u64, Option<Picture>)>,
+    /// When the battery was last checked; `None` to check at once, as on
+    /// starting and waking.
+    battery_checked: Option<Instant>,
 }
 
 impl<R> std::fmt::Debug for Session<R> {
@@ -495,6 +512,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             status_wifi: false,
             dictionary: None,
             sleep_cover: None,
+            battery_checked: None,
         };
         session.go_home(device, Refresh::Full, now);
         Ok(session)
@@ -589,7 +607,9 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             self.library.save(device);
         }
         self.syncer = Some(syncer);
-        self.start_sync(device, now);
+        if !battery_low(device) {
+            self.start_sync(device, now);
+        }
     }
 
     /// Starts a sync, unless one's running or it isn't paired.
@@ -928,7 +948,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         {
             deadline = deadline.min(due);
         }
-        deadline
+        let battery_due = self.battery_checked.map_or(now, |at| at + BATTERY_CHECK);
+        deadline.min(battery_due)
     }
 
     pub fn handle(
@@ -940,11 +961,24 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         if !matches!(event, Event::Tick) {
             self.last_touch = now;
         }
+        if let Some(flow) = self.check_battery(now, device) {
+            return Ok(flow);
+        }
         // Only a page has words to look up.
         let event = match event {
             Event::Hold { x, y } if !matches!(self.mode, Mode::Reading) => Event::Tap { x, y },
             event => event,
         };
+        self.respond(event, now, device)
+    }
+
+    /// What [`Session::handle`] does with `event` on the screen that's up.
+    fn respond(
+        &mut self,
+        event: Event,
+        now: Instant,
+        device: &mut dyn Device,
+    ) -> Result<Flow, AppError> {
         let at_home = matches!(self.mode, Mode::Home(_));
         let in_library = matches!(self.mode, Mode::Library(_));
         let in_search = matches!(self.mode, Mode::Search(_));
@@ -1420,6 +1454,9 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         };
         if syncer.busy() {
             return Err("Wait for the sync to end, then tap Update again.".to_owned());
+        }
+        if battery_low(device) {
+            return Err("The battery is low. Plug the Kobo in, then tap Update again.".to_owned());
         }
         let version = syncer.update_ready().unwrap_or_default().to_owned();
         self.save(device);
@@ -1907,6 +1944,34 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         Ok(flow)
     }
 
+    /// Once [`BATTERY_CHECK`] has passed since the last check: switches off
+    /// if the battery is empty.
+    fn check_battery(&mut self, now: Instant, device: &mut dyn Device) -> Option<Flow> {
+        let due = self
+            .battery_checked
+            .is_none_or(|at| now.duration_since(at) >= BATTERY_CHECK);
+        if !due {
+            return None;
+        }
+        self.battery_checked = Some(now);
+        battery_empty(device).then(|| self.switch_off_empty(device))
+    }
+
+    /// The battery is empty: saves the place and says so, for the platform
+    /// to switch off.
+    fn switch_off_empty(&mut self, device: &mut dyn Device) -> Flow {
+        self.save(device);
+        self.ssh_off();
+        power_page::draw_final(
+            &mut self.screen,
+            &mut self.ui,
+            "Battery empty",
+            "Charge the Kobo, then hold the power button to switch it on.",
+        );
+        device.show(&self.screen, Refresh::Full);
+        Flow::PowerOff
+    }
+
     fn sleep(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
         self.save(device);
         let back = self.here();
@@ -1920,10 +1985,12 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         // What was read goes to the server, so another reader or the
         // website has it while this one sleeps.
         let local = self.local_places(device);
-        let sending = self
-            .syncer
-            .as_mut()
-            .is_some_and(|syncer| syncer.send_places(local));
+        let low = battery_low(device);
+        let sending = !low
+            && self
+                .syncer
+                .as_mut()
+                .is_some_and(|syncer| syncer.send_places(local));
         self.mode = Mode::Asleep {
             suspend_at: now + SUSPEND_DELAY,
             sending_until: sending.then(|| now + SLEEP_SEND_LONGEST),
@@ -1998,10 +2065,13 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         };
         self.woke = Some(now);
         self.last_touch = now;
-        let due = self.syncer.as_ref().is_some_and(|s| {
-            s.started
-                .is_none_or(|at| now.duration_since(at) >= SYNC_EVERY)
-        });
+        // Asleep, the clock the checks go by stood still.
+        self.battery_checked = None;
+        let due = !battery_low(device)
+            && self.syncer.as_ref().is_some_and(|s| {
+                s.started
+                    .is_none_or(|at| now.duration_since(at) >= SYNC_EVERY)
+            });
         if due {
             self.start_sync(device, now);
         }
@@ -2229,6 +2299,20 @@ fn local_time(clock: u64, offset: i32) -> Option<String> {
         local.hour(),
         local.minute()
     ))
+}
+
+/// At [`BATTERY_EMPTY`] or below, and not charging.
+fn battery_empty(device: &mut dyn Device) -> bool {
+    device
+        .battery()
+        .is_some_and(|b| !b.charging && b.percent <= BATTERY_EMPTY)
+}
+
+/// At [`BATTERY_LOW`] or below, and not charging.
+fn battery_low(device: &mut dyn Device) -> bool {
+    device
+        .battery()
+        .is_some_and(|b| !b.charging && b.percent <= BATTERY_LOW)
 }
 
 fn load_json<T: serde::de::DeserializeOwned>(device: &mut dyn Device, name: &str) -> Option<T> {

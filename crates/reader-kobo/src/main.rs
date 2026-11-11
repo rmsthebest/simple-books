@@ -35,7 +35,10 @@
 //!   and [`EXIT_RESTART`]. The sleep cover's events (`event0`) are only
 //!   logged for now, since what they mean isn't confirmed.
 //! - **Light, battery and sleep:** sysfs, as recorded in
-//!   `docs/clara-bw-hardware.md`.
+//!   `docs/clara-bw-hardware.md`. The light by the power button shows
+//!   charging, through the kernel's trigger, and is left off for Nickel.
+//! - **The clock:** set from the network once Wi-Fi is up, if it's plainly
+//!   wrong, as a flat battery leaves it ([`clock`]).
 //! - **Sync:** with the server Nickel syncs with, or the one in `server`
 //!   in the app folder. Wi-Fi is on only while a sync, a pairing or SSH
 //!   needs it, through `wifi.sh` (see [`online`]). It syncs at start, on
@@ -53,6 +56,7 @@
 #![deny(unsafe_code)]
 #![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
+mod clock;
 mod device;
 mod in_nickel;
 mod input;
@@ -112,6 +116,11 @@ const BOOT_LIGHTS: [&str; 2] = [
     "/sys/class/leds/LED/brightness",
     "/sys/class/leds/bd71828-green-led/brightness",
 ];
+/// The Clara BW's one light, beside the power button. Nickel turns it off
+/// once it's up; without Nickel, the kernel's `battery-charging` trigger
+/// lights it while charging.
+const LIGHT_TRIGGER: &str = "/sys/class/leds/LED/trigger";
+const CHARGING_TRIGGER: &str = "battery-charging";
 
 static LOG: Mutex<Option<File>> = Mutex::new(None);
 
@@ -177,9 +186,17 @@ fn main() {
             ""
         }
     );
-    match run(&dir, boot, after_usb) {
+    let flow = run(&dir, boot, after_usb);
+    // Nickel looks after the light, so it's left off for it.
+    if matches!(
+        flow,
+        Ok(Flow::Continue | Flow::Exit | Flow::Uninstall) | Err(_)
+    ) {
+        light_off();
+    }
+    match flow {
         Ok(Flow::PowerOff) => {
-            log!("powering off");
+            log!("powering off, {}", device::battery_state());
             std::process::exit(EXIT_POWER_OFF);
         }
         Ok(Flow::Restart) => {
@@ -271,6 +288,7 @@ fn run(dir: &Path, boot: bool, after_usb: bool) -> io::Result<Flow> {
     if boot {
         booted(dir);
     }
+    charging_light();
     if let Some(version) = update::settled(dir) {
         session.updated(&version, &mut kobo, Instant::now());
     }
@@ -500,6 +518,26 @@ fn booted(dir: &Path) {
         log!("removing {BOOT_STARTED}: {error}");
     }
     sys::sync();
+}
+
+/// Lights the light while charging, as the kernel sees it. That also stops
+/// the blink it has from the boot.
+fn charging_light() {
+    if Path::new(LIGHT_TRIGGER).exists()
+        && let Err(error) = fs::write(LIGHT_TRIGGER, CHARGING_TRIGGER)
+    {
+        log!("{LIGHT_TRIGGER}: {error}");
+    }
+}
+
+/// Turns the light off, and its trigger with it, for Nickel.
+fn light_off() {
+    let light = BOOT_LIGHTS[0];
+    if Path::new(light).exists()
+        && let Err(error) = fs::write(light, "0")
+    {
+        log!("turning {light} off: {error}");
+    }
 }
 
 /// Logs how a sync or pairing went, once it ends. Never the pairing code.

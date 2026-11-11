@@ -207,7 +207,24 @@ coordinates.
 
 - **Battery:** `/sys/class/power_supply/battery` (`capacity`, `status`). The charger is
   `/sys/class/power_supply/ac` (`online`). Before firmware 6 the battery was called
-  `bd71827_bat`.
+  `bd71827_bat`. It also has `voltage_now` (µV), `current_now` and `current_avg` (µA,
+  negative while discharging: about −104 mA awake and idle with Wi-Fi on), `charge_now`,
+  `charge_full` and `charge_full_design` (µAh, 1955 mAh new), and `temp` (tenths of a
+  °C). `batt_params` holds the gauge's OCV table: 0% is 3.5 V and 100% is 4.45 V.
+  Nickel powers off on a low battery and refuses Wi-Fi and updates when it's low;
+  nothing else on the system does.
+- **Clock:** the RTC is `bd70528-rtc` (`/dev/rtc0`, `hctosys` at boot), kept in UTC
+  (`/etc/adjtime`). The shutdown scripts save the system time to it; `poweroff -f`
+  skips them. A flat battery resets it to 2000. Nickel sets the time with
+  `settimeofday` and `hwclock`. busybox `ntpd` is `/usr/sbin/ntpd`, and `hwclock` is
+  util-linux's. `/sys/class/rtc/rtc0/wakealarm` is there for wake alarms: Nickel's
+  automatic power off uses one.
+- **The light by the power button:** `/sys/class/leds/LED`, the only one fitted.
+  `bd71828-amber-led` and `bd71828-green-led` are the PMIC's, and nothing shows when they're
+  set; amber reads 1 for no visible reason. Every LED offers the kernel triggers
+  `battery-charging`, `battery-full`, `battery-charging-or-full`,
+  `battery-charging-blink-full-solid`, `ac-online`, `mmc0`, `timer` and `rfkill0`. The
+  boot leaves `LED` on `timer` (blinking) until Nickel writes 0 to `brightness`.
 - **Front light:**
   - `/sys/class/backlight/mxc_msp430.0/brightness` runs 0–100. KOReader uses it for
     brightness.

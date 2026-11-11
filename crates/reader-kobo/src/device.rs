@@ -24,6 +24,10 @@ const BOOT_MARK: &str = "# simple-books";
 
 const BATTERY: &str = "/sys/class/power_supply/battery/capacity";
 const CHARGER: &str = "/sys/class/power_supply/ac/online";
+/// In microvolts.
+const VOLTAGE: &str = "/sys/class/power_supply/battery/voltage_now";
+/// "Charging", "Discharging" or "Full".
+const STATUS: &str = "/sys/class/power_supply/battery/status";
 /// 0–100.
 const BRIGHTNESS: &str = "/sys/class/backlight/mxc_msp430.0/brightness";
 /// 0–10, warmest at 0; the session's warmth is the other way round, as
@@ -205,6 +209,18 @@ fn save_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.write_all(bytes)?;
     file.sync_all()?;
     fs::rename(&temporary, path)
+}
+
+/// The battery as the gauge sees it, for the log: "2%, 3.52 V,
+/// Discharging".
+pub(crate) fn battery_state() -> String {
+    let percent = read_number(BATTERY).map_or_else(|| "?".to_owned(), |p| p.to_string());
+    let volts = read_number(VOLTAGE).map_or_else(
+        || "? V".to_owned(),
+        |microvolts| format!("{:.2} V", f64::from(microvolts) / 1e6),
+    );
+    let status = fs::read_to_string(STATUS).unwrap_or_default();
+    format!("battery {percent}%, {volts}, {}", status.trim())
 }
 
 fn read_number(path: &str) -> Option<u32> {

@@ -15,8 +15,9 @@ use book_format::{
     Align, Block, BlockKind, BookReader, Chapter, FormatError, Limits, Position, Span,
 };
 use reader_app::{
-    AUTO_SLEEP, Battery, BookFile, Books, Device, Event, FULL_EVERY, Flow, Light, Network, Refresh,
-    SLEEP_RETRY, SUSPEND_DELAY, Session, Sort, Ssh, SshLogin, SyncSetup, Turn,
+    AUTO_SLEEP, BATTERY_CHECK, BATTERY_EMPTY, BATTERY_LOW, Battery, BookFile, Books, Device, Event,
+    FULL_EVERY, Flow, Light, Network, Refresh, SLEEP_RETRY, SUSPEND_DELAY, Session, Sort, Ssh,
+    SshLogin, SyncSetup, Turn,
 };
 use reader_core::Reader;
 
@@ -480,6 +481,66 @@ fn while_charging_it_stays_on_the_sleep_screen_until_unplugged() {
     assert_eq!(run.device.last, page_screen);
 }
 
+fn on_battery(percent: u8) -> Battery {
+    Battery {
+        percent,
+        charging: false,
+    }
+}
+
+#[test]
+fn an_empty_battery_saves_the_place_says_so_and_switches_off() {
+    let mut run = Run::with(Fake {
+        battery: Some(on_battery(40)),
+        can_suspend: true,
+        ..Fake::default()
+    });
+    run.tap(FORWARD.0, FORWARD.1);
+    run.device
+        .files
+        .retain(|name, _| !name.starts_with("position-"));
+    run.device.battery = Some(on_battery(BATTERY_EMPTY));
+    let page = run.device.last;
+    // It's checked once a minute, so the deadline says when.
+    assert!(run.session.deadline(run.now) <= run.now + BATTERY_CHECK);
+    assert_eq!(run.tick_after(BATTERY_CHECK), Flow::PowerOff);
+    assert!(run.device.files.keys().any(|k| k.starts_with("position-")));
+    assert_ne!(run.device.last, page, "the panel says so");
+}
+
+#[test]
+fn an_empty_battery_on_the_charger_carries_on() {
+    let mut run = Run::with(Fake {
+        battery: Some(Battery {
+            percent: 1,
+            charging: true,
+        }),
+        can_suspend: true,
+        ..Fake::default()
+    });
+    assert_eq!(run.tick_after(BATTERY_CHECK), Flow::Continue);
+    assert_eq!(run.tap(FORWARD.0, FORWARD.1), Flow::Continue);
+}
+
+#[test]
+fn waking_on_an_empty_battery_switches_off_at_once() {
+    let mut run = Run::with(Fake {
+        battery: Some(on_battery(40)),
+        can_suspend: true,
+        ..Fake::default()
+    });
+    run.tick_after(BATTERY_CHECK);
+    run.send(Event::Power);
+    // Drained while it slept.
+    run.device.battery = Some(on_battery(2));
+    assert_eq!(run.tick_after(SUSPEND_DELAY), Flow::Continue);
+    assert_eq!(run.device.suspended, 1);
+    // The clock the checks go by stood still while it slept, so the check
+    // is due straight away.
+    assert!(run.session.deadline(run.now) <= run.now);
+    assert_eq!(run.tick_after(Duration::ZERO), Flow::PowerOff);
+}
+
 #[test]
 fn a_tap_wakes_it_from_the_sleep_screen() {
     let mut run = Run::new();
@@ -787,17 +848,14 @@ fn the_time_in_the_status_moves_on_each_minute() {
     });
     let shown = run.device.shown.len();
     let home = run.device.last;
-    let due = run.session.deadline(run.now);
-    assert!(due <= run.now + Duration::from_secs(60), "{due:?}");
-    // Nothing to draw before then.
+    // The first tick, for the battery, has nothing to draw.
+    run.now += Duration::from_secs(1);
     run.session
-        .handle(
-            Event::Tick,
-            run.now + Duration::from_secs(1),
-            &mut run.device,
-        )
+        .handle(Event::Tick, run.now, &mut run.device)
         .unwrap();
     assert_eq!(run.device.shown.len(), shown);
+    let due = run.session.deadline(run.now);
+    assert!(due <= run.now + Duration::from_secs(60), "{due:?}");
     run.device.clock += 60;
     run.now = due;
     run.session
@@ -1455,6 +1513,25 @@ fn an_update_that_fails_says_why_and_stays() {
     let before = run.device.last;
     assert_eq!(run.tap(KOBO_UPDATE.0, KOBO_UPDATE.1), Flow::Continue);
     assert_ne!(run.device.last, before, "it says why");
+    assert_eq!(run.tap(KOBO_UPDATE.0, KOBO_UPDATE.1), Flow::Update);
+}
+
+#[test]
+fn a_low_battery_waits_for_the_charger_to_update() {
+    let dir = tempfile::tempdir().unwrap();
+    let device = Fake {
+        battery: Some(on_battery(BATTERY_LOW)),
+        ..Fake::default()
+    };
+    let mut run = with_an_update(dir.path(), device);
+    let before = run.device.last;
+    assert_eq!(run.tap(KOBO_UPDATE.0, KOBO_UPDATE.1), Flow::Continue);
+    assert_eq!(run.device.updates, 0);
+    assert_ne!(run.device.last, before, "it says why");
+    run.device.battery = Some(Battery {
+        percent: BATTERY_LOW,
+        charging: true,
+    });
     assert_eq!(run.tap(KOBO_UPDATE.0, KOBO_UPDATE.1), Flow::Update);
 }
 
