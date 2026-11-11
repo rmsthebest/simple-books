@@ -14,6 +14,6 @@ mod run;
 mod state;
 
 pub use client::{Client, Error};
-pub use run::{Progress, Report, sync};
+pub use run::{Progress, Report, send, sync, unsent};
 pub use state::{Paths, State, Synced};
 pub use sync_proto::{Book, PairStart, PairStatus, Spot, Status};

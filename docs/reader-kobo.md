@@ -122,7 +122,8 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   website's Kobo page, sign in and type the code shown. The library downloads in the
   background, and you can carry on reading. Then it syncs at start, on waking once half
   an hour has passed, and with **Sync now**: new and changed books come down, removed
-  ones go, and where you are in each book goes up. A newer place from another reader is
+  ones go, and where you are in each book goes up. Going to sleep sends where you are,
+  if it changed, before the Kobo suspends (for up to a minute). A newer place from another reader is
   used next time you open the book, unless you're reading it. **Unpair**, tapped twice,
   stops syncing and leaves the books on the reader.
 - **USB:** plugged into a computer, the reader offers **Connect**, which saves your place

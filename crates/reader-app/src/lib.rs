@@ -28,7 +28,8 @@
 //! - **Sync:** with [`Session::enable_sync`], books come from the server and
 //!   places go both ways, on another thread ([`sync`]). It syncs on
 //!   starting, on waking once [`SYNC_EVERY`] has passed, and when asked on
-//!   the sync screen ([`sync_page`]), from settings.
+//!   the sync screen ([`sync_page`]), from settings. Going to sleep sends
+//!   any new places first, and nothing else.
 #![forbid(unsafe_code)]
 #![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
@@ -87,6 +88,9 @@ pub const SLEEP_RETRY: Duration = Duration::from_secs(5);
 const BACKGROUND_CHECK: Duration = Duration::from_secs(1);
 /// The place is saved every this many turns, besides on sleep and exit.
 const SAVE_EVERY: u32 = 10;
+/// The longest the places from before sleeping may take to send before
+/// it suspends anyway; Wi-Fi alone can take most of a minute.
+pub const SLEEP_SEND_LONGEST: Duration = Duration::from_secs(60);
 /// On waking, it syncs if it hasn't for this long.
 pub const SYNC_EVERY: Duration = Duration::from_mins(30);
 /// While a sync runs, the session looks for news this often.
@@ -329,6 +333,9 @@ enum Mode {
     Asleep {
         /// When to try to suspend next.
         suspend_at: Instant,
+        /// Sending the places read before sleeping: how long to wait for
+        /// it before stopping it to suspend.
+        sending_until: Option<Instant>,
         back: Back,
     },
 }
@@ -1451,9 +1458,16 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         }
         let syncing = self.syncing();
         match &mut self.mode {
-            Mode::Asleep { suspend_at, .. } => {
+            Mode::Asleep {
+                suspend_at,
+                sending_until,
+                ..
+            } => {
                 if now >= *suspend_at {
-                    if syncing {
+                    if syncing && sending_until.is_some_and(|until| now < until) {
+                        // The places from before sleeping: a little longer.
+                        *suspend_at = now + SYNC_CHECK;
+                    } else if syncing {
                         // Not with the network up: it finishes first.
                         if let Some(syncer) = &self.syncer {
                             syncer.stop();
@@ -1676,8 +1690,16 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         );
         device.show(&self.screen, Refresh::Full);
         self.ssh_off();
+        // What was read goes to the server, so another reader or the
+        // website has it while this one sleeps.
+        let local = self.local_places(device);
+        let sending = self
+            .syncer
+            .as_mut()
+            .is_some_and(|syncer| syncer.send_places(local));
         self.mode = Mode::Asleep {
             suspend_at: now + SUSPEND_DELAY,
+            sending_until: sending.then(|| now + SLEEP_SEND_LONGEST),
             back,
         };
         Ok(())

@@ -398,6 +398,28 @@ impl Syncer {
         });
     }
 
+    /// Sends the places the server doesn't have yet, if there are any, and
+    /// nothing else: before sleeping. It doesn't count as a sync for
+    /// [`Syncer::started`], so waking still checks for new books. True if it
+    /// started.
+    pub(crate) fn send_places(&mut self, local: BTreeMap<String, Spot>) -> bool {
+        let Some(server) = self.setup.server.clone() else {
+            return false;
+        };
+        if self.busy() || !self.paired() || !reader_sync::unsent(&self.state(), &local) {
+            return false;
+        }
+        let paths = self.paths.clone();
+        self.activity = Some(Activity::Connecting);
+        self.spawn(move |send, stop, network| {
+            online(network, send, || {
+                let client = Client::new(&server);
+                send_once(&client, &paths, &local, send, stop);
+            });
+        });
+        true
+    }
+
     fn spawn(
         &mut self,
         job: impl FnOnce(&dyn Fn(Update), &AtomicBool, &dyn Network) + Send + 'static,
@@ -577,6 +599,31 @@ fn sync_once(
         &mut progress,
         stop,
     ) {
+        Ok(report) => send(Update::Synced(report)),
+        Err(Error::NotPaired) => {
+            let _ = paths.forget();
+            send(Update::Unpaired);
+        }
+        Err(error) => send(Update::Failed(failure(&error))),
+    }
+}
+
+/// [`reader_sync::send`] once, unless it's to stop first.
+fn send_once(
+    client: &Client,
+    paths: &Paths,
+    local: &BTreeMap<String, Spot>,
+    send: &dyn Fn(Update),
+    stop: &AtomicBool,
+) {
+    let Some(secret) = paths.secret() else {
+        return send(Update::Unpaired);
+    };
+    if stop.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut state = State::load(&paths.state);
+    match reader_sync::send(client, &secret, paths, &mut state, local) {
         Ok(report) => send(Update::Synced(report)),
         Err(Error::NotPaired) => {
             let _ = paths.forget();

@@ -159,6 +159,33 @@ pub fn sync(
     Ok(report)
 }
 
+/// Sends the places in `local` the server doesn't have yet, and nothing
+/// else: what the reader does before it sleeps. Saves `state`.
+pub fn send(
+    client: &Client,
+    secret: &str,
+    paths: &Paths,
+    state: &mut State,
+    local: &BTreeMap<String, Spot>,
+) -> Result<Report, Error> {
+    let mut report = Report::default();
+    send_places(client, secret, state, local, &mut report)?;
+    state.save(&paths.state)?;
+    Ok(report)
+}
+
+/// Whether any place in `local` is one the server doesn't have yet.
+pub fn unsent(state: &State, local: &BTreeMap<String, Spot>) -> bool {
+    local
+        .iter()
+        .any(|(id, spot)| needs_sending(state, id, spot))
+}
+
+/// A synced book's place that differs from the server's.
+fn needs_sending(state: &State, id: &str, spot: &Spot) -> bool {
+    state.books.contains_key(id) && state.server_places.get(id) != Some(spot)
+}
+
 fn send_places(
     client: &Client,
     secret: &str,
@@ -167,7 +194,7 @@ fn send_places(
     report: &mut Report,
 ) -> Result<(), Error> {
     for (id, spot) in local {
-        if !state.books.contains_key(id) || state.server_places.get(id) == Some(spot) {
+        if !needs_sending(state, id, spot) {
             continue;
         }
         match client.put_place(secret, id, spot) {

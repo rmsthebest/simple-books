@@ -22,7 +22,10 @@ use reader_app::{
 use reader_core::Canvas;
 use simple_books::server::{
     convert::reader::REVISION,
-    db::reader::{PlaceRow, ReaderChange},
+    db::{
+        reader::{PlaceRow, ReaderChange},
+        scope::UserScope,
+    },
     now,
 };
 use uuid::Uuid;
@@ -184,6 +187,62 @@ fn start(dir: &Path, url: &str, device: &mut Disk) -> Session<fs::File> {
     session
 }
 
+/// Reads on, then sleeps: the new place goes up before it suspends, and
+/// nothing else is synced.
+async fn sleeping_sends_the_place(
+    session: &mut Session<fs::File>,
+    device: &mut Disk,
+    scope: &UserScope,
+    file: &str,
+) {
+    let further = read_a_little(session, device, file);
+    session
+        .handle(Event::Power, Instant::now(), device)
+        .unwrap();
+    assert!(session.syncing(), "sending the place before sleeping");
+    until(session, device, "the place sent", |s| !s.syncing()).await;
+    assert_eq!(session.last_sync(), Some("1 place sent."));
+    let changes = scope.reader_changes(0, 100).await.unwrap();
+    let last = changes
+        .changes
+        .iter()
+        .rev()
+        .find_map(|(_, change)| match change {
+            ReaderChange::Place(place) => Some(place.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        (last.chapter, last.block),
+        (i64::from(further.chapter), i64::from(further.block))
+    );
+    // Waking and sleeping again with nothing new read sends nothing.
+    session
+        .handle(
+            Event::Power,
+            Instant::now() + Duration::from_secs(3),
+            device,
+        )
+        .unwrap();
+    session
+        .handle(
+            Event::Power,
+            Instant::now() + Duration::from_secs(6),
+            device,
+        )
+        .unwrap();
+    assert!(!session.syncing(), "nothing new to send");
+    session
+        .handle(
+            Event::Power,
+            Instant::now() + Duration::from_secs(9),
+            device,
+        )
+        .unwrap();
+    sync_from_the_book(session, device).await;
+    assert_eq!(session.last_sync(), Some("everything was up to date."));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn pairing_then_books_and_places_go_back_and_forth() {
     let server = TestServer::start().await;
@@ -249,6 +308,8 @@ async fn pairing_then_books_and_places_go_back_and_forth() {
     );
     assert_eq!(sent.status, "reading");
     assert!(sent.percent > 0.0);
+
+    sleeping_sends_the_place(&mut session, &mut device, &scope, &entry.file).await;
 
     // Read further on another reader: this one moves there at its next sync.
     let device_id = server.state.db.list_devices(scope.user_id()).await.unwrap()[1].id;
