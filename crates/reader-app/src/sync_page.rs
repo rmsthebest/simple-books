@@ -1,5 +1,6 @@
 //! The sync screen, from settings: pairing with the website, syncing now,
-//! how the last sync went, and SSH where the platform has it.
+//! how the last sync went, SSH where the platform has it, and Update once a
+//! sync has downloaded a new version.
 
 use reader_core::{Canvas, Typesetter};
 
@@ -32,7 +33,18 @@ pub(crate) enum Action {
     Unpair,
     /// Turns SSH on or off.
     Ssh,
+    /// Starts the version a sync downloaded.
+    Update,
     Back,
+}
+
+/// Where updating the app has got to, where it updates itself.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Update {
+    /// The version downloaded, ready to start.
+    pub ready: Option<String>,
+    /// Why the last update didn't download or go in.
+    pub problem: Option<String>,
 }
 
 /// Where everything is, for one view.
@@ -43,7 +55,8 @@ pub(crate) struct Layout {
     pub confirming: bool,
     /// Where SSH is, if the platform has it.
     pub ssh: Option<SshState>,
-    buttons: Vec<(Rect, Action, &'static str)>,
+    pub update: Update,
+    buttons: Vec<(Rect, Action, String)>,
 }
 
 const TEXT_TOP: f32 = HEADER + 96.0;
@@ -57,6 +70,7 @@ impl Layout {
         view: View,
         confirming: bool,
         ssh: Option<SshState>,
+        update: Update,
     ) -> Self {
         let (width, height) = (width as f32, height as f32);
         let content = width - 2.0 * MARGIN;
@@ -86,7 +100,7 @@ impl Layout {
         let mut buttons: Vec<_> = rects
             .into_iter()
             .zip(row)
-            .map(|(rect, (action, label, _))| (rect, action, label))
+            .map(|(rect, (action, label, _))| (rect, action, label.to_owned()))
             .collect();
         // Off while another job runs, which SSH would have to wait for.
         let ssh_button = match &ssh {
@@ -94,15 +108,25 @@ impl Layout {
             Some(SshState::Off { .. }) => !matches!(view, View::Busy(_)),
             None => false,
         };
+        let mut above = top;
         if ssh_button {
-            let top = top - BUTTON_HEIGHT - 24.0;
-            let rect = ui::row(MARGIN, top, content, BUTTON_HEIGHT, &[1.0])[0];
-            buttons.push((rect, Action::Ssh, "SSH"));
+            above -= BUTTON_HEIGHT + 24.0;
+            let rect = ui::row(MARGIN, above, content, BUTTON_HEIGHT, &[1.0])[0];
+            buttons.push((rect, Action::Ssh, "SSH".to_owned()));
+        }
+        // Not while a job runs: it may be downloading another.
+        if let Some(version) = &update.ready
+            && !matches!(view, View::Busy(_))
+        {
+            above -= BUTTON_HEIGHT + 24.0;
+            let rect = ui::row(MARGIN, above, content, BUTTON_HEIGHT, &[1.0])[0];
+            buttons.push((rect, Action::Update, format!("Update to {version}")));
         }
         Self {
             view,
             confirming,
             ssh,
+            update,
             buttons,
         }
     }
@@ -156,6 +180,19 @@ impl Layout {
                 problem: Some(problem),
             }) => say(canvas, ui, &format!("SSH didn't start: {problem}"), &mut y),
             _ => {}
+        }
+        if let Some(problem) = &self.update.problem {
+            say(canvas, ui, problem, &mut y);
+        } else if let Some(version) = &self.update.ready {
+            say(
+                canvas,
+                ui,
+                &format!(
+                    "Simple Books {version} is downloaded. Update starts it; your books and \
+                     places stay as they are."
+                ),
+                &mut y,
+            );
         }
         for (rect, action, label) in &self.buttons {
             let on = match action {
@@ -298,11 +335,30 @@ mod tests {
                 password: Some("abcd-efgh".into()),
             })),
         ];
-        for (view, ssh) in views
-            .iter()
-            .flat_map(|view| ssh.iter().map(move |ssh| (view.clone(), ssh.clone())))
-        {
-            let layout = Layout::new(1072, 1448, view.clone(), false, ssh.clone());
+        let updates = [
+            Update::default(),
+            Update {
+                ready: Some("v2".into()),
+                problem: None,
+            },
+        ];
+        let mut cases = Vec::new();
+        for view in &views {
+            for ssh in &ssh {
+                for update in &updates {
+                    cases.push((view.clone(), ssh.clone(), update.clone()));
+                }
+            }
+        }
+        for (view, ssh, update) in cases {
+            let ready = update.ready.is_some();
+            let layout = Layout::new(1072, 1448, view.clone(), false, ssh.clone(), update);
+            let has_update = layout.buttons.iter().any(|(_, a, _)| *a == Action::Update);
+            assert_eq!(
+                has_update,
+                ready && !matches!(view, View::Busy(_)),
+                "{view:?}"
+            );
             let has_ssh = layout.buttons.iter().any(|(_, a, _)| *a == Action::Ssh);
             let wanted = match (&ssh, &view) {
                 (Some(SshState::On(_)), _) => true,

@@ -52,6 +52,7 @@ mod shelf;
 mod sync;
 mod sync_page;
 mod ui;
+mod updated_page;
 mod usb_page;
 
 use std::{
@@ -350,6 +351,10 @@ enum Mode {
     },
     /// From settings: starting when switched on, and uninstalling.
     Kobo(kobo_page::Layout),
+    /// A new version is up, after Update: saying so until tapped.
+    Updated {
+        back: Back,
+    },
     /// The power button was held: power off, restart or Nickel.
     Power {
         layout: power_page::Layout,
@@ -794,7 +799,18 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         };
         let settings = Settings::default();
         let ssh = self.syncer.as_ref().and_then(sync::Syncer::ssh);
-        let layout = sync_page::Layout::new(settings.width, settings.height, view, confirming, ssh);
+        let update = self.syncer.as_ref().map(|syncer| sync_page::Update {
+            ready: syncer.update_ready().map(str::to_owned),
+            problem: syncer.update_problem().map(str::to_owned),
+        });
+        let layout = sync_page::Layout::new(
+            settings.width,
+            settings.height,
+            view,
+            confirming,
+            ssh,
+            update.unwrap_or_default(),
+        );
         let status = self.status_text(device, now);
         let clock = device.clock();
         let last = self
@@ -808,9 +824,9 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         self.mode = Mode::Sync(layout);
     }
 
-    fn sync_tap(&mut self, x: f32, y: f32, now: Instant, device: &mut dyn Device) {
+    fn sync_tap(&mut self, x: f32, y: f32, now: Instant, device: &mut dyn Device) -> Flow {
         let Mode::Sync(layout) = &mut self.mode else {
-            return;
+            return Flow::Continue;
         };
         let action = layout.hit(x, y);
         let confirming = layout.confirming;
@@ -818,8 +834,16 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         match action {
             Some(sync_page::Action::Back) => {
                 self.show_settings(device, Refresh::Full, now);
-                return;
+                return Flow::Continue;
             }
+            Some(sync_page::Action::Update) => match self.update(device) {
+                Ok(()) => return Flow::Update,
+                Err(why) => {
+                    if let Some(syncer) = self.syncer.as_mut() {
+                        syncer.update_failed(why);
+                    }
+                }
+            },
             Some(sync_page::Action::Pair) => {
                 if let Some(syncer) = self.syncer.as_mut() {
                     syncer.pair(now);
@@ -847,9 +871,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                     }
                 }
             }
-            None => return,
+            None => return Flow::Continue,
         }
         self.show_sync(device, Refresh::Partial, now);
+        Flow::Continue
     }
 
     /// Whether the library screen is up.
@@ -882,6 +907,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             | Mode::Kobo(_)
             | Mode::Sync(_)
             | Mode::Usb { .. }
+            | Mode::Updated { .. }
             | Mode::Reading
             | Mode::Lookup { .. }
             | Mode::Menu(_) => self.last_touch + AUTO_SLEEP,
@@ -921,6 +947,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let in_kobo = matches!(self.mode, Mode::Kobo(_));
         let in_sync = matches!(self.mode, Mode::Sync(_));
         let in_usb = matches!(self.mode, Mode::Usb { .. });
+        let updated_back = match &self.mode {
+            Mode::Updated { back, .. } => Some(back.clone()),
+            _ => None,
+        };
         let power_until = match self.mode {
             Mode::Power { nickel_at, .. } => Some(nickel_at),
             _ => None,
@@ -955,6 +985,12 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                     self.sleep(device, now)?;
                 }
             }
+            Event::Tap { .. } | Event::Back if updated_back.is_some() => {
+                if let Some(back) = updated_back {
+                    self.go_back(back, device, now)?;
+                }
+            }
+            _ if updated_back.is_some() => {}
             Event::Tap { x, y } if at_home => return self.home_tap(x, y, now, device),
             Event::Tap { x, y } if in_menu => return self.menu_tap(x, y, now, device),
             Event::Tap { x, y } if in_library => self.library_tap(x, y, now, device)?,
@@ -962,7 +998,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Event::Tap { x, y } if in_search => self.search_tap(x, y, now, device)?,
             Event::Tap { x, y } if in_settings => self.settings_tap(x, y, now, device)?,
             Event::Tap { x, y } if in_kobo => return Ok(self.kobo_tap(x, y, now, device)),
-            Event::Tap { x, y } if in_sync => self.sync_tap(x, y, now, device),
+            Event::Tap { x, y } if in_sync => return Ok(self.sync_tap(x, y, now, device)),
             Event::Tap { x, y } if in_usb => return self.usb_tap(x, y, now, device),
             Event::Tap { .. } | Event::Hold { .. } | Event::Back if in_lookup => {
                 self.mode = Mode::Reading;
@@ -1304,9 +1340,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             state.version = syncer.version();
             state.update = syncer.update_ready().map(str::to_owned);
             if state.update_said.is_none() {
-                state.update_said = syncer
-                    .update_problem()
-                    .map(|why| format!("The update didn't download: {why}"));
+                state.update_said = syncer.update_problem().map(str::to_owned);
             }
         }
         let layout = kobo_page::Layout::new(settings.width, settings.height, state);
@@ -1353,6 +1387,24 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         }
         self.show_kobo(state, device, Refresh::Partial, now);
         Flow::Continue
+    }
+
+    /// Says that `version` is up, after an update, until a tap goes on to
+    /// what was showing.
+    pub fn updated(&mut self, version: &str, device: &mut dyn Device, now: Instant) {
+        let back = self.here();
+        let settings = Settings::default();
+        let layout = updated_page::Layout::new(settings.width, settings.height, version);
+        let status = self.status_text(device, now);
+        layout.draw(&mut self.screen, &mut self.ui, &status);
+        device.show(&self.screen, Refresh::Full);
+        self.guard.refreshing(now + Refresh::Full.duration());
+        self.mode = Mode::Updated { back };
+    }
+
+    /// Whether the screen saying an update is up is showing.
+    pub fn showing_updated(&self) -> bool {
+        matches!(self.mode, Mode::Updated { .. })
     }
 
     /// Puts the downloaded update in place, saying so on the screen, unless
@@ -1438,6 +1490,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             | Mode::Kobo(_)
             | Mode::Sync(_)
             | Mode::Usb { .. }
+            | Mode::Updated { .. }
             | Mode::Power { .. } => Some(((0.0, ui::HEADER), ui::HEADER * 0.62)),
             Mode::Menu(layout) => Some(layout.status_band()),
             Mode::Reading | Mode::Lookup { .. } | Mode::Asleep { .. } => None,
@@ -1663,6 +1716,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             | Mode::Kobo(_)
             | Mode::Sync(_)
             | Mode::Usb { .. }
+            | Mode::Updated { .. }
             | Mode::Reading
             | Mode::Lookup { .. }
             | Mode::Menu(_) => {
@@ -1683,9 +1737,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Mode::Search(layout) => Back::Search(layout.query().to_owned(), layout.library_page()),
             Mode::Settings(_) | Mode::Kobo(_) => Back::Settings,
             Mode::Sync(_) => Back::Sync,
-            Mode::Usb { back, .. } | Mode::Power { back, .. } | Mode::Asleep { back, .. } => {
-                back.clone()
-            }
+            Mode::Usb { back, .. }
+            | Mode::Updated { back, .. }
+            | Mode::Power { back, .. }
+            | Mode::Asleep { back, .. } => back.clone(),
             Mode::Reading | Mode::Lookup { .. } | Mode::Menu(_) => Back::Reading,
         }
     }

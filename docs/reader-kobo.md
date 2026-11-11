@@ -159,7 +159,8 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
 - **The Kobo screen**, from Settings, has **Start Simple Books when switched on** and
   **Uninstall Simple Books** (see [Booting into the reader](#booting-into-the-reader) and
   [Remove it](#if-something-goes-wrong)). It says which version is installed, and once a
-  sync has downloaded a new one, **Update** starts it (see [Updates](#updates)).
+  sync has downloaded a new one, **Update** starts it, as it does on the sync screen (see
+  [Updates](#updates)).
 - **Sleep** with a short press of the power button, or by leaving it alone for 10
   minutes. The sleep screen, the cover of the book you're reading, comes up at once (a
   book without a cover leaves the page up with "Asleep" along the bottom), and the Kobo
@@ -280,16 +281,16 @@ can't be handed over, it says so and the reader comes back; `logread` shows what
 
 Each sync also asks the server for the reader's files (`GET /device/v1/kobo`): those it
 would install, with their sizes and SHA-256s. If their `version` isn't the one installed,
-the sync downloads the files that differ into `update/` and checks each one. Settings,
-Kobo then says which version is ready and shows **Update**, and the sync screen's last
-result mentions it. Nothing changes until Update is tapped. The server is trusted as it is
+the sync downloads the files that differ into `update/` and checks each one. The sync
+screen then shows **Update to** that version, and so does Settings, Kobo, as **Update**.
+Nothing changes until it's tapped. The server is trusted as it is
 for books: over HTTPS, with the reader's secret.
 
 **Update** moves each downloaded file over the one it replaces, keeping that in
 `previous/`, puts the plugin in `/usr/local/Kobo/imageformats/` (Nickel keeps using the
 old one until it restarts), and leaves `update-trying`. The reader exits with status 91,
 and `reader.sh` or `boot.sh` starts it again, which is the new version. That removes
-`update-trying` once home is up. If the new version exits before then, the script puts
+`update-trying` once home is up, and says it's updated until tapped. If the new version exits before then, the script puts
 `previous/` back, plugin included, and starts the old version; `reader.log` says so.
 
 So updating a Kobo is updating the server: a new image has the new Kobo files built in.

@@ -261,7 +261,9 @@ fn run(dir: &Path, boot: bool, after_usb: bool) -> io::Result<Flow> {
     if boot {
         booted(dir);
     }
-    update::settled(dir);
+    if let Some(version) = update::settled(dir) {
+        session.updated(&version, &mut kobo, Instant::now());
+    }
     // Just back from the computer, with the cable still in: it was ejected
     // there, so don't ask again until it's plugged in again.
     if inputs.computer && !after_usb {

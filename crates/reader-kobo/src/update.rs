@@ -4,7 +4,8 @@
 //! The reader then exits with [`EXIT_UPDATE`], and `reader.sh` or
 //! `boot.sh` starts it again: the new version. If that exits before home
 //! is up, while `update-trying` is still there, the script puts the files
-//! in `previous/` back and starts the old one.
+//! in `previous/` back and starts the old one. Once it is up, it says it
+//! was updated until tapped.
 
 use std::{fs, io, os::unix::fs::PermissionsExt, path::Path};
 
@@ -51,10 +52,11 @@ fn install_plugin(dir: &Path) -> io::Result<()> {
     fs::rename(&new, PLUGIN)
 }
 
-/// Home is up: an update being tried has worked.
-pub(crate) fn settled(dir: &Path) {
-    if let Some(version) = reader_sync::update::settled(dir) {
-        log!("update: {version} is up");
-        sys::sync();
-    }
+/// Home is up: an update being tried has worked. Returns the version it
+/// brought, to say so on the screen.
+pub(crate) fn settled(dir: &Path) -> Option<String> {
+    let version = reader_sync::update::settled(dir)?;
+    log!("update: {version} is up");
+    sys::sync();
+    Some(version)
 }

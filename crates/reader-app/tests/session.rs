@@ -1419,6 +1419,34 @@ fn an_update_that_fails_says_why_and_stays() {
     assert_eq!(run.tap(KOBO_UPDATE.0, KOBO_UPDATE.1), Flow::Update);
 }
 
+/// On the sync screen without SSH, Update is just above the bottom row.
+const SYNC_UPDATE: (f32, f32) = (536.0, 1256.0);
+
+#[test]
+fn the_sync_screen_offers_the_update_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut run = with_an_update(dir.path(), Fake::default());
+    run.tap(KOBO_BACK.0 + 400.0, KOBO_BACK.1);
+    run.tap(SETTINGS_SYNC.0, SETTINGS_SYNC.1);
+    assert!(run.session.in_sync());
+    assert_eq!(run.tap(SYNC_UPDATE.0, SYNC_UPDATE.1), Flow::Update);
+    assert_eq!(run.device.updates, 1);
+}
+
+#[test]
+fn a_new_version_says_it_is_up_until_tapped() {
+    let mut run = Run::at_home(Fake::default());
+    let home = run.device.last;
+    run.session.updated("v2", &mut run.device, run.now);
+    assert!(run.session.showing_updated());
+    assert_ne!(run.device.last, home);
+    // Where Settings is on the home screen: this tap only goes on.
+    run.tap(HOME_SETTINGS.0, HOME_SETTINGS.1);
+    assert!(!run.session.showing_updated());
+    assert!(run.session.at_home());
+    assert_eq!(run.device.last, home);
+}
+
 #[test]
 fn with_nothing_downloaded_there_is_no_update() {
     let dir = tempfile::tempdir().unwrap();

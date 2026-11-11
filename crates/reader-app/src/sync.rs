@@ -263,7 +263,7 @@ pub(crate) struct Syncer {
     ssh_problem: Option<String>,
     /// The version downloaded and ready to update to.
     update_ready: Option<String>,
-    /// Why the last update didn't download.
+    /// Why the last update didn't download or go in.
     update_problem: Option<String>,
 }
 
@@ -311,9 +311,15 @@ impl Syncer {
         self.update_ready.as_deref()
     }
 
-    /// Why the last update didn't download, if it didn't.
+    /// Why the last update didn't download or go in, if it didn't, as a
+    /// sentence for the screen.
     pub(crate) fn update_problem(&self) -> Option<&str> {
         self.update_problem.as_deref()
+    }
+
+    /// Updating didn't work; this says why.
+    pub(crate) fn update_failed(&mut self, why: String) {
+        self.update_problem = Some(why);
     }
 
     /// The update was put in place; it's not ready any more.
@@ -534,7 +540,9 @@ impl Syncer {
                     self.update_ready.clone_from(version);
                     self.update_problem = None;
                 }
-                Update::NewVersionFailed(why) => self.update_problem = Some(why.clone()),
+                Update::NewVersionFailed(why) => {
+                    self.update_problem = Some(format!("The update didn't download: {why}"));
+                }
                 Update::Synced(_) | Update::Failed(_) => {}
                 Update::Done => {
                     self.running = None;
