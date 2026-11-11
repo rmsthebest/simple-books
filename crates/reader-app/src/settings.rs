@@ -1,6 +1,7 @@
-//! The settings screen, from the home screen: how pages look, the light,
-//! and the turn guard, each a row of − and + like the reader's menu, with a
-//! sample paragraph at the top laid out as a book's page would be.
+//! The settings screen, from the home screen: the font and how pages look,
+//! the light, and the turn guard, each a row of − and + like the reader's
+//! menu, with a sample paragraph at the top laid out as a book's page would
+//! be.
 //!
 //! The reader's menu changes some of the same settings over the page; both
 //! step them through [`Setting::step`].
@@ -18,16 +19,19 @@ use crate::{
 
 /// The sample's part of the screen, under the header.
 const PREVIEW_TOP: f32 = HEADER + 3.0;
-const PREVIEW_HEIGHT: f32 = 330.0;
-const ROW: f32 = 94.0;
+const PREVIEW_HEIGHT: f32 = 300.0;
+const ROW: f32 = 88.0;
 const ROWS_TOP: f32 = PREVIEW_TOP + PREVIEW_HEIGHT + 12.0;
 const TOGGLE_HEIGHT: f32 = 88.0;
 /// Between a row's − and +.
 const VALUE_WIDTH: f32 = 180.0;
+/// Where the font row's − is: its name needs the room.
+const FONT_MINUS: f32 = MARGIN + 140.0;
 
 /// A setting stepped with − and +.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Setting {
+    Font,
     TextSize,
     LineSpacing,
     Margins,
@@ -39,7 +43,8 @@ pub(crate) enum Setting {
 }
 
 /// The rows, in order, with their names.
-const ROWS: [(Setting, &str); 8] = [
+const ROWS: [(Setting, &str); 9] = [
+    (Setting::Font, "Font"),
     (Setting::TextSize, "Text size"),
     (Setting::LineSpacing, "Line spacing"),
     (Setting::Margins, "Margins"),
@@ -70,6 +75,22 @@ impl Setting {
         let up = step == Step::Up;
         let before = (p.clone(), *light);
         let changed = match self {
+            Setting::Font => {
+                let families = reader_core::font_families();
+                let now = p
+                    .font
+                    .as_ref()
+                    .and_then(|font| families.iter().position(|f| f == font))
+                    .unwrap_or(0);
+                let next = if up {
+                    (now + 1).min(families.len() - 1)
+                } else {
+                    now.saturating_sub(1)
+                };
+                // Literata, the first, is kept as `None`.
+                p.font = (next > 0).then(|| families[next].clone());
+                Changed::Layout
+            }
             Setting::TextSize => {
                 p.font_size = (p.font_size + if up { 4.0 } else { -4.0 }).clamp(24.0, 80.0);
                 Changed::Layout
@@ -86,6 +107,9 @@ impl Setting {
                     p.margin.saturating_sub(16).max(16)
                 };
                 Changed::Layout
+            }
+            Setting::Darkness if !reader_core::varies_in_weight(p.font.as_deref()) => {
+                Changed::Nothing
             }
             Setting::Darkness => {
                 p.weight = (p.weight + if up { 50.0 } else { -50.0 }).clamp(300.0, 700.0);
@@ -122,9 +146,14 @@ impl Setting {
     /// The setting's value as shown.
     pub(crate) fn value(self, p: &Preferences, light: Light) -> String {
         match self {
+            Setting::Font => p.font.clone().unwrap_or_else(|| "Literata".to_owned()),
             Setting::TextSize => format!("{}", p.font_size),
             Setting::LineSpacing => format!("{:.1}", p.line_height),
             Setting::Margins => p.margin.to_string(),
+            // Only regular and bold: there's nothing in between to step.
+            Setting::Darkness if !reader_core::varies_in_weight(p.font.as_deref()) => {
+                "—".to_owned()
+            }
             Setting::Darkness => format!("{}", p.weight),
             Setting::Contrast => format!("{:.1}", p.gamma),
             Setting::Light => format!("{}%", light.brightness),
@@ -197,8 +226,13 @@ impl Layout {
         for (i, (setting, _)) in ROWS.iter().enumerate() {
             let top = ROWS_TOP + i as f32 * ROW + 6.0;
             let plus = width - MARGIN - side;
-            // Room between them for the widest value, "1000 ms".
-            let minus = plus - side - VALUE_WIDTH;
+            // Room between them for the widest value, "1000 ms", or for
+            // a font's name.
+            let minus = if *setting == Setting::Font {
+                FONT_MINUS
+            } else {
+                plus - side - VALUE_WIDTH
+            };
             for (left, step, label) in [(minus, Step::Down, "−"), (plus, Step::Up, "+")] {
                 let rect = Rect {
                     left,
@@ -269,7 +303,8 @@ impl Layout {
             ui.draw_label(canvas, name, (MARGIN, baseline), LABEL_SIZE, 400.0);
             let minus = self.buttons[2 * i].0;
             let plus = self.buttons[2 * i + 1].0;
-            let value = setting.value(p, light);
+            let room = plus.left - minus.right() - 2.0 * ui::GAP;
+            let value = fitted(ui, setting.value(p, light), room);
             let middle = f32::midpoint(minus.right(), plus.left);
             let value_width = ui.label_width(&value, LABEL_SIZE, 400.0);
             let at = (middle - value_width / 2.0, baseline);
@@ -283,6 +318,22 @@ impl Layout {
             ui::toggle(canvas, ui, *rect, label, on);
         }
     }
+}
+
+/// `value`, cut short with an ellipsis if it's wider than `room`.
+fn fitted(ui: &mut Typesetter, value: String, room: f32) -> String {
+    if ui.label_width(&value, LABEL_SIZE, 400.0) <= room {
+        return value;
+    }
+    let mut chars: Vec<char> = value.chars().collect();
+    while !chars.is_empty() {
+        chars.pop();
+        let cut = format!("{}…", chars.iter().collect::<String>().trim_end());
+        if ui.label_width(&cut, LABEL_SIZE, 400.0) <= room {
+            return cut;
+        }
+    }
+    "…".to_owned()
 }
 
 /// How many of the `most` rows from `from` to show so no line is cut
@@ -416,8 +467,9 @@ mod tests {
     fn the_preview_stops_between_lines() {
         let page = preview(&Preferences::default().settings()).unwrap();
         let from = 56;
-        let rows = whole_lines(&page, from, 330);
-        assert!(rows > 200 && rows <= 330, "{rows}");
+        let most = PREVIEW_HEIGHT as usize;
+        let rows = whole_lines(&page, from, most);
+        assert!(rows > 200 && rows <= most, "{rows}");
         let width = page.width() as usize;
         let last = &page.pixels()[(from + rows - 1) * width..(from + rows) * width];
         assert!(last.iter().all(|g| *g > 240));

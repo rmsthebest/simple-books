@@ -106,9 +106,13 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
 - **The bar along the top** of every screen but the page, the menu's included, shows the
   day and time (in the time zone set in Nickel), **Wi-Fi** while it's on, and the
   battery, with ↑ while charging. The time moves on each minute.
-- **Settings** has text size, line spacing, margins, darkness, contrast, the light and
-  its warmth, and the turn guard, each with − and +, and **Justified** and
-  **Hyphenated**. A sample paragraph at the top is laid out as a page would be, so the
+- **Settings** has the font, text size, line spacing, margins, darkness, contrast, the
+  light and its warmth, and the turn guard, each with − and +, and **Justified** and
+  **Hyphenated**. **Font** steps from Literata, the reader's own, through the Kobo's
+  fonts (`/usr/share/fonts`) and any put in `fonts/` on its storage over USB, as for
+  Nickel; those for Chinese, Japanese and Korean are left out. A font found there is
+  read only when it's chosen. Most come in regular and bold only, so darkness shows
+  **—** for them, and contrast is the way to make their text darker. A sample paragraph at the top is laid out as a page would be, so the
   change shows at once. The open book is laid out again with them when it's next shown,
   keeping the first line at the top. With the turn guard **Off**, every turn counts,
   even while the panel is still drawing the last.

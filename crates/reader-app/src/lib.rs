@@ -275,6 +275,9 @@ pub enum Flow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    /// The text's family, from [`reader_core::font_families`]; `None` for
+    /// Literata.
+    pub font: Option<String>,
     pub font_size: f32,
     pub weight: f32,
     pub gamma: f32,
@@ -297,6 +300,7 @@ impl Default for Preferences {
     fn default() -> Self {
         let settings = Settings::default();
         Self {
+            font: None,
             font_size: settings.font_size,
             weight: settings.weight,
             gamma: settings.gamma,
@@ -315,6 +319,7 @@ impl Default for Preferences {
 impl Preferences {
     fn settings(&self) -> Settings {
         Settings {
+            font: self.font.clone(),
             font_size: self.font_size,
             weight: self.weight,
             gamma: self.gamma,

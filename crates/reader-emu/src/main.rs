@@ -1,7 +1,7 @@
 //! The reader in a desktop window, shaped and timed like the Clara BW.
 //!
 //! ```sh
-//! cargo run --release -p reader-emu -- [books-folder | book.epub | book.book]... [--full] [--server URL] [--dictionary FILE]
+//! cargo run --release -p reader-emu -- [books-folder | book.epub | book.book]... [--full] [--server URL] [--dictionary FILE] [--fonts FOLDER]...
 //! ```
 //!
 //! Starts on the home screen, with the books in the given folder. EPUBs
@@ -30,6 +30,10 @@
 //! `scripts/build-kobo-files.sh` in
 //! `target/kobo-files/.adds/simple-books/dict-en-sv`. Without it, the file
 //! is looked for in the cache directory.
+//!
+//! `--fonts FOLDER` offers the fonts in that folder, and the folders in it,
+//! in Settings, as the Kobo offers its own and those in `fonts/` on its
+//! storage. It can be given more than once.
 //!
 //! It runs the same [`Session`] as the Kobo, with the mouse as the finger:
 //!
@@ -69,7 +73,7 @@ use reader_app::{
 use reader_core::{Canvas, Settings};
 
 const USAGE: &str = "usage: reader-emu [books-folder | book.epub | book.book]... [--full] \
-                     [--server URL] [--dictionary FILE]";
+                     [--server URL] [--dictionary FILE] [--fonts FOLDER]...";
 
 /// What the command line asks for.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -78,6 +82,7 @@ struct Args {
     full: bool,
     server: Option<String>,
     dictionary: Option<PathBuf>,
+    fonts: Vec<PathBuf>,
 }
 
 impl Args {
@@ -103,6 +108,13 @@ impl Args {
                 }
                 _ if arg.starts_with("--dictionary=") => {
                     parsed.dictionary = Some(PathBuf::from(&arg["--dictionary=".len()..]));
+                }
+                "--fonts" => {
+                    let folder = args.next().ok_or("--fonts needs a folder of fonts")?;
+                    parsed.fonts.push(PathBuf::from(folder));
+                }
+                _ if arg.starts_with("--fonts=") => {
+                    parsed.fonts.push(PathBuf::from(&arg["--fonts=".len()..]));
                 }
                 _ if arg.starts_with("--") => return Err(format!("unknown option {arg}\n{USAGE}")),
                 _ => parsed.paths.push(PathBuf::from(arg)),
@@ -179,6 +191,10 @@ fn main() {
     });
     println!("books in {}", folder.display());
 
+    if !args.fonts.is_empty() {
+        let found = reader_core::find_fonts(&args.fonts);
+        println!("fonts: {}", found.join(", "));
+    }
     let started = Instant::now();
     let books = Arc::new(Folder::new(folder));
     let mut session = Session::start(books, &mut panel, started).unwrap_or_else(|error| {
@@ -558,6 +574,10 @@ mod tests {
             Some(PathBuf::from("dict-en-sv"))
         );
         assert_eq!(
+            parse(&["--fonts", "a", "--fonts=b"]).unwrap().fonts,
+            [PathBuf::from("a"), PathBuf::from("b")]
+        );
+        assert_eq!(
             parse(&["--server=https://books.example.com"])
                 .unwrap()
                 .server
@@ -570,6 +590,7 @@ mod tests {
             &["--server", "https://books.example.com/kobo/x"],
             &["--fast"],
             &["--dictionary"],
+            &["--fonts"],
         ] {
             assert!(parse(bad).is_err(), "{bad:?}");
         }

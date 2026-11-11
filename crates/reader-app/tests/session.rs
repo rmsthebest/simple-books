@@ -648,12 +648,16 @@ const HOME_LIBRARY: (f32, f32) = (296.0, 1376.0);
 const HOME_SETTINGS: (f32, f32) = (776.0, 1376.0);
 /// On the settings screen: a row's − or +, the toggles, and Done.
 fn setting(row: u8, up: bool) -> (f32, f32) {
-    let x = if up { 967.0 } else { 926.0 - 180.0 - 41.0 };
-    (x, 496.0 + f32::from(row) * 94.0)
+    let x = if up { 970.0 } else { 932.0 - 180.0 - 38.0 };
+    (x, 463.0 + f32::from(row) * 88.0)
 }
-const LINE_SPACING: u8 = 1;
-const LIGHT: u8 = 5;
-const TURN_GUARD: u8 = 7;
+const FONT: u8 = 0;
+/// The font row's − sits further left, to leave room for the name.
+const FONT_DOWN: (f32, f32) = (242.0, 463.0);
+const LINE_SPACING: u8 = 2;
+const DARKNESS: u8 = 4;
+const LIGHT: u8 = 6;
+const TURN_GUARD: u8 = 8;
 const JUSTIFIED: (f32, f32) = (296.0, 1253.0);
 /// Sync, Kobo and Done along the bottom.
 const SETTINGS_SYNC: (f32, f32) = (216.0, 1376.0);
@@ -1007,6 +1011,41 @@ fn settings_lay_the_book_out_again_when_it_is_next_shown() {
 
     let again = Run::at_home(run.device);
     assert_eq!(again.session.preferences().line_height, 1.5);
+}
+
+#[test]
+fn a_font_found_on_the_device_sets_the_book() {
+    let fonts = concat!(env!("CARGO_MANIFEST_DIR"), "/../reader-core/fonts");
+    reader_core::find_fonts(&[fonts.into()]);
+    let mut run = Run::new();
+    run.settings();
+    let before = run.device.last;
+    run.step(FONT, true);
+    assert_eq!(
+        run.session.preferences().font.as_deref(),
+        Some("Intel One Mono")
+    );
+    assert_ne!(run.device.last, before, "the name and the sample change");
+    // It comes only in regular and bold, so there's no darkness to step.
+    let weight = run.session.preferences().weight;
+    run.step(DARKNESS, true);
+    assert_eq!(run.session.preferences().weight, weight);
+    run.tap(SETTINGS_DONE.0, SETTINGS_DONE.1);
+    run.tap(CURRENT.0, CURRENT.1);
+    assert_eq!(
+        run.reader().settings().font.as_deref(),
+        Some("Intel One Mono")
+    );
+
+    let mut again = Run::at_home(run.device);
+    assert_eq!(
+        again.session.preferences().font.as_deref(),
+        Some("Intel One Mono")
+    );
+    // − goes back to Literata, kept as none.
+    again.settings();
+    again.tap(FONT_DOWN.0, FONT_DOWN.1);
+    assert_eq!(again.session.preferences().font, None);
 }
 
 #[test]

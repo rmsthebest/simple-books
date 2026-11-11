@@ -29,6 +29,7 @@ mod typeset;
 use serde::{Deserialize, Serialize};
 
 pub use canvas::Canvas;
+pub use fonts::{find_fonts, font_families, varies_in_weight};
 pub use guard::TurnGuard;
 pub use paginate::{PageMap, PageRef, PageStart, paginate};
 pub use picture::Picture;
@@ -70,6 +71,10 @@ pub struct Settings {
     /// text can be made darker for e-ink by thickening its strokes. Headings
     /// and bold text keep the same steps above it.
     pub weight: f32,
+    /// The body text's family, from [`font_families`]; `None` for Literata.
+    /// One that's no longer there is set in Literata too.
+    #[serde(default)]
+    pub font: Option<String>,
     /// Applied to glyphs' coverage: above 1, the grey edges of letters are
     /// drawn darker, so text looks heavier without changing its shapes.
     pub gamma: f32,
@@ -91,6 +96,7 @@ impl Default for Settings {
             hyphenate: true,
             optimal_breaks: true,
             weight: 400.0,
+            font: None,
             gamma: 1.0,
         }
     }
@@ -119,6 +125,10 @@ impl Settings {
             u8::from(self.hyphenate),
             u8::from(self.optimal_breaks),
         ]);
+        if let Some(font) = &self.font {
+            hash.write(font.as_bytes());
+            hash.write(&fonts::fingerprint(Some(font)).to_le_bytes());
+        }
         hash.0
     }
 
@@ -132,14 +142,20 @@ impl Settings {
     }
 
     /// A weight `steps` above the body text's, within the fonts' range.
+    #[cfg(test)]
     pub(crate) fn weight_above(&self, steps: f32) -> f32 {
-        (self.weight + steps).clamp(MIN_WEIGHT, MAX_WEIGHT)
+        weight_above(self.weight, steps)
     }
 
     /// The height of one line of body text.
     pub(crate) fn line(&self) -> f32 {
         self.font_size * self.line_height
     }
+}
+
+/// A weight `steps` above `weight`, within the fonts' range.
+pub(crate) fn weight_above(weight: f32, steps: f32) -> f32 {
+    (weight + steps).clamp(MIN_WEIGHT, MAX_WEIGHT)
 }
 
 /// 64-bit FNV-1a.

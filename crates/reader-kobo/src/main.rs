@@ -86,6 +86,9 @@ const COVER: &str = "/dev/input/event0";
 /// Which USB cable is in: `SDP=1` or `CDP=1` is a computer, `DCP=1` a
 /// charger. The reader offers to connect for the first two.
 const EXTCON: &str = "/sys/class/extcon/extcon0/state";
+/// Where fonts are looked for: the Kobo's own, and those put in `fonts/`
+/// on its storage, as for Nickel.
+const FONT_FOLDERS: [&str; 2] = ["/usr/share/fonts", "/mnt/onboard/fonts"];
 /// Holding the power button this long brings up the power screen, which
 /// goes to Nickel if nothing is tapped. Shorter presses sleep.
 const HOLD: Duration = Duration::from_secs(3);
@@ -242,6 +245,13 @@ fn run(dir: &Path, boot: bool, after_usb: bool) -> io::Result<Flow> {
     let mut inputs = Inputs::open(width)?;
 
     let started = Instant::now();
+    let folders: Vec<PathBuf> = FONT_FOLDERS.iter().map(PathBuf::from).collect();
+    let fonts = reader_core::find_fonts(&folders);
+    log!(
+        "{} font families found in {:?}",
+        fonts.len(),
+        started.elapsed()
+    );
     let books = Arc::new(Folder::new(dir.join("books")));
     let mut session = Session::start(books, &mut kobo, started).map_err(io::Error::other)?;
     log!(

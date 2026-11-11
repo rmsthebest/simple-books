@@ -3606,6 +3606,7 @@ dependencies = [
  "parley",
  "serde",
  "skrifa",
+ "tempfile",
  "thiserror 2.0.21",
  "zeno",
 ]

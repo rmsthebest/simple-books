@@ -199,6 +199,10 @@ pub struct Typesetter {
     /// Whether the block in `layout` was broken with Knuth–Plass.
     optimal: bool,
     hyphen_em: f32,
+    /// The body text's family and weight. A family that comes only in
+    /// regular and bold is set at 400, whatever [`Settings::weight`] says.
+    body: String,
+    body_weight: f32,
     /// A monospace space, per pixel of font size.
     code_space: f32,
     /// What [`CODE_SPACE`] is short of a monospace space, per pixel.
@@ -220,11 +224,20 @@ impl Typesetter {
     /// `language` is the book's BCP 47 tag, which picks shaping and
     /// line-breaking rules.
     pub fn new(settings: Settings, language: Option<&str>) -> Self {
-        let mut fonts = fonts::context();
-        let hyphen_em = fonts::advance_em(&mut fonts, fonts::BODY_FAMILY, '-').unwrap_or(0.33);
+        let fonts::Fonts {
+            context: mut fonts,
+            body,
+            varies_in_weight,
+        } = fonts::context(settings.font.as_deref());
+        let body_weight = if varies_in_weight {
+            settings.weight
+        } else {
+            400.0
+        };
+        let hyphen_em = fonts::advance_em(&mut fonts, &body, '-').unwrap_or(0.33);
         let code_space = fonts::advance_em(&mut fonts, fonts::MONO_FAMILY, ' ').unwrap_or(0.6);
-        let code_space_spacing = code_space
-            - fonts::advance_em(&mut fonts, fonts::BODY_FAMILY, CODE_SPACE).unwrap_or(code_space);
+        let code_space_spacing =
+            code_space - fonts::advance_em(&mut fonts, &body, CODE_SPACE).unwrap_or(code_space);
         let glyphs = Glyphs::new(settings.gamma);
         Self {
             settings,
@@ -238,6 +251,8 @@ impl Typesetter {
             current: None,
             optimal: false,
             hyphen_em,
+            body,
+            body_weight,
             code_space,
             code_space_spacing,
             code_spaces: Vec::new(),
@@ -327,7 +342,7 @@ impl Typesetter {
             let baseline = y0 + line.metrics().baseline;
             let size = self.settings.font_size * style.scale;
             let gap = self.settings.font_size * 0.5;
-            self.lay_out_aux(marker, size, self.settings.weight_above(0.0));
+            self.lay_out_aux(marker, size, crate::weight_above(self.body_weight, 0.0));
             let x = x0 - gap - self.aux.width();
             self.draw_aux(&mut page.canvas, x, baseline);
         }
@@ -548,7 +563,7 @@ impl Typesetter {
                     3 => 1.15,
                     _ => 1.0,
                 };
-                style.weight = Some(self.settings.weight_above(200.0));
+                style.weight = Some(crate::weight_above(self.body_weight, 200.0));
                 style.space_before = line * 1.5;
                 style.space_after = line * 0.5;
                 style.keep_with_next = true;
@@ -597,7 +612,7 @@ impl Typesetter {
         builder.push_default(StyleProperty::FontFamily(if style.preformatted {
             mono()
         } else {
-            FontFamily::named(fonts::BODY_FAMILY)
+            body_family(&self.body)
         }));
         builder.push_default(StyleProperty::FontSize(size));
         builder.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(
@@ -613,7 +628,9 @@ impl Typesetter {
         // A run with nowhere to break, such as a long URL, is broken at the
         // margin rather than drawn past it.
         builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
-        let weight = style.weight.unwrap_or(self.settings.weight_above(0.0));
+        let weight = style
+            .weight
+            .unwrap_or(crate::weight_above(self.body_weight, 0.0));
         builder.push_default(StyleProperty::FontWeight(FontWeight::new(weight)));
         for (span, range) in block.spans.iter().zip(ranges) {
             if range.is_empty() {
@@ -625,7 +642,10 @@ impl Typesetter {
             }
             if st.strong {
                 builder.push(
-                    StyleProperty::FontWeight(FontWeight::new(self.settings.weight_above(300.0))),
+                    StyleProperty::FontWeight(FontWeight::new(crate::weight_above(
+                        self.body_weight,
+                        300.0,
+                    ))),
                     range.clone(),
                 );
             }
@@ -836,9 +856,7 @@ impl Typesetter {
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.fonts, text, 1.0, true);
-        builder.push_default(StyleProperty::FontFamily(FontFamily::named(
-            fonts::BODY_FAMILY,
-        )));
+        builder.push_default(StyleProperty::FontFamily(body_family(&self.body)));
         builder.push_default(StyleProperty::FontSize(size));
         builder.push_default(StyleProperty::Locale(self.locale));
         builder.push_default(optical_size(size, self.settings.dpi));
@@ -876,6 +894,18 @@ impl Typesetter {
                 }
             }
         }
+    }
+}
+
+/// The body text's family, falling back to Literata for anything it lacks.
+fn body_family(body: &str) -> FontFamily<'static> {
+    if body == fonts::BODY_FAMILY {
+        FontFamily::named(fonts::BODY_FAMILY)
+    } else {
+        FontFamily::List(Cow::Owned(vec![
+            parley::FontFamilyName::Named(Cow::Owned(body.to_owned())),
+            parley::FontFamilyName::Named(Cow::Borrowed(fonts::BODY_FAMILY)),
+        ]))
     }
 }
 
@@ -942,6 +972,38 @@ mod tests {
         };
         let placed = typesetter.block(at, 0);
         (typesetter, placed)
+    }
+
+    #[test]
+    fn a_found_family_sets_the_text_at_its_own_weights() {
+        // The bundled folder has Literata too, which is offered anyway.
+        let folder = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/fonts"));
+        assert_eq!(crate::find_fonts(&[folder]), ["Intel One Mono"]);
+        let plain = Settings {
+            weight: 500.0,
+            ..Settings::default()
+        };
+        let mono = Settings {
+            font: Some("Intel One Mono".to_owned()),
+            ..plain.clone()
+        };
+        assert_ne!(plain.cache_key(), mono.cache_key());
+        let (literata, set_plain) = lay_out(plain);
+        let (typesetter, set_mono) = lay_out(mono);
+        assert_eq!(literata.body_weight, 500.0);
+        assert_eq!(typesetter.body, "Intel One Mono");
+        assert_eq!(
+            typesetter.body_weight, 400.0,
+            "it comes in regular and bold"
+        );
+        // Monospace letters are wider, so the same words take more lines.
+        assert!(set_mono.lines.len() > set_plain.lines.len());
+        // A family that isn't there is set in Literata.
+        let gone = Settings {
+            font: Some("Nowhere Sans".to_owned()),
+            ..Settings::default()
+        };
+        assert_eq!(lay_out(gone).0.body, fonts::BODY_FAMILY);
     }
 
     #[test]
