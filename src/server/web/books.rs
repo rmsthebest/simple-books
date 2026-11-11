@@ -150,6 +150,10 @@ pub enum Back {
     Shared,
     #[default]
     Book,
+    /// The library, showing the finished books.
+    Finished,
+    /// The library, showing the books not on the Kobo.
+    Off,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,6 +166,8 @@ fn back_to(back: Back, book: Uuid, done: &str) -> Response {
     match back {
         Back::Shared => to(&format!("/shared?done={done}")).into_response(),
         Back::Book => to(&format!("/books/{book}?done={done}")).into_response(),
+        Back::Finished => to(&format!("/?show=finished&done={done}")).into_response(),
+        Back::Off => to(&format!("/?show=off&done={done}")).into_response(),
     }
 }
 
@@ -173,6 +179,27 @@ pub async fn add(
 ) -> Result<Response, AppError> {
     user.scope.add_to_library(book).await?;
     Ok(back_to(form.back, book, "added"))
+}
+
+/// `POST /books/{id}/off-kobo`: "Remove from my Kobo", keeping the book in
+/// this user's library, with their place in it.
+pub async fn off_kobo(
+    user: CurrentUser,
+    Path(book): Path<Uuid>,
+    Form(form): Form<BackForm>,
+) -> Result<Response, AppError> {
+    user.scope.set_on_device(book, false).await?;
+    Ok(back_to(form.back, book, "off_kobo"))
+}
+
+/// `POST /books/{id}/on-kobo`: "Put back on my Kobo".
+pub async fn on_kobo(
+    user: CurrentUser,
+    Path(book): Path<Uuid>,
+    Form(form): Form<BackForm>,
+) -> Result<Response, AppError> {
+    user.scope.set_on_device(book, true).await?;
+    Ok(back_to(form.back, book, "on_kobo"))
 }
 
 /// `POST /books/{id}/remove`: takes someone else's book out of this user's library.

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT change_seq AS \"change_seq!: i64\", book_id AS \"book_id!: String\" FROM (\n                   SELECT change_seq, book_id FROM book_tombstones\n                    WHERE user_id = ?1 AND change_seq > ?2 AND first_seq <= ?2\n                   UNION ALL\n                   SELECT change_seq, book_id FROM library_entries\n                    WHERE user_id = ?1 AND change_seq > ?2 AND first_seq <= ?2 AND on_device = 0\n               ) ORDER BY change_seq LIMIT ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "change_seq!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "library_entries",
+            "name": "change_seq"
+          }
+        }
+      },
+      {
+        "name": "book_id!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "library_entries",
+            "name": "book_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "d8c68c44d17ed00917f12c83d97f2bc7e2fb10fd1d3cb71eb88f0f34ee9f0ebe"
+}

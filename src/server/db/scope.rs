@@ -18,7 +18,8 @@ use uuid::Uuid;
 use super::{
     Db,
     models::{
-        BookCard, BookRow, MetadataEdit, NewBook, ReadingStateRow, SyncRow, SyncRowKind, Visibility,
+        BookCard, BookRow, MetadataEdit, NewBook, Reading, ReadingStateRow, SyncRow, SyncRowKind,
+        Visibility,
     },
 };
 use crate::server::now;
@@ -146,15 +147,27 @@ impl UserScope {
         .await
     }
 
-    /// This user's library, newest first.
+    /// This user's library, newest first, with how far they are through
+    /// each book: the reader's place or Nickel's, whichever is newer.
     pub async fn library_cards(&self) -> Result<Vec<BookCard>, sqlx::Error> {
         sqlx::query_as!(
             BookCard,
             r#"SELECT b.id AS "id!", b.owner_id, b.visibility, b.title, b.authors_json, b.cover_id,
-                      b.kepub_state, u.username AS shared_by, 1 AS "in_library!: bool"
+                      b.kepub_state, u.username AS shared_by, 1 AS "in_library!: bool",
+                      e.on_device AS "on_device!: bool",
+                      CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)
+                                THEN p.status
+                           WHEN s.status = 'Finished' THEN 'finished'
+                           WHEN s.status = 'Reading' THEN 'reading'
+                           ELSE 'unread' END AS "read_status!: String",
+                      CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)
+                                THEN p.percent
+                           ELSE s.percent END AS "read_percent: f64"
                FROM library_entries e
                JOIN books b ON b.id = e.book_id
                JOIN users u ON u.id = b.owner_id
+               LEFT JOIN reader_places p ON p.user_id = e.user_id AND p.book_id = e.book_id
+               LEFT JOIN kobo_reading_states s ON s.user_id = e.user_id AND s.book_id = e.book_id
                WHERE e.user_id = ?1
                ORDER BY e.added_at DESC, b.title"#,
             self.user_id
@@ -169,9 +182,20 @@ impl UserScope {
             BookCard,
             r#"SELECT b.id AS "id!", b.owner_id, b.visibility, b.title, b.authors_json, b.cover_id,
                       b.kepub_state, u.username AS shared_by,
-                      EXISTS (SELECT 1 FROM library_entries e
-                              WHERE e.book_id = b.id AND e.user_id = ?1) AS "in_library!: bool"
+                      e.user_id IS NOT NULL AS "in_library!: bool",
+                      COALESCE(e.on_device, 0) AS "on_device!: bool",
+                      CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)
+                                THEN p.status
+                           WHEN s.status = 'Finished' THEN 'finished'
+                           WHEN s.status = 'Reading' THEN 'reading'
+                           ELSE 'unread' END AS "read_status!: String",
+                      CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)
+                                THEN p.percent
+                           ELSE s.percent END AS "read_percent: f64"
                FROM books b JOIN users u ON u.id = b.owner_id
+               LEFT JOIN library_entries e ON e.book_id = b.id AND e.user_id = ?1
+               LEFT JOIN reader_places p ON p.user_id = e.user_id AND p.book_id = e.book_id
+               LEFT JOIN kobo_reading_states s ON s.user_id = e.user_id AND s.book_id = e.book_id
                WHERE b.visibility = 'shared'
                ORDER BY b.created_at DESC, b.title"#,
             self.user_id
@@ -218,6 +242,93 @@ impl UserScope {
         Ok(row.and_then(|r| Uuid::parse_str(&r.id).ok()))
     }
 
+    /// How far this user is through a book in their library, and whether
+    /// it's on their readers. `None` if it isn't in their library.
+    pub async fn reading(&self, book: Uuid) -> Result<Option<(Reading, bool)>, sqlx::Error> {
+        let id = book.to_string();
+        let row = sqlx::query!(
+            r#"SELECT e.on_device AS "on_device!: bool",
+                      CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)
+                                THEN p.status
+                           WHEN s.status = 'Finished' THEN 'finished'
+                           WHEN s.status = 'Reading' THEN 'reading'
+                           ELSE 'unread' END AS "read_status!: String",
+                      CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)
+                                THEN p.percent
+                           ELSE s.percent END AS "read_percent: f64"
+               FROM library_entries e
+               LEFT JOIN reader_places p ON p.user_id = e.user_id AND p.book_id = e.book_id
+               LEFT JOIN kobo_reading_states s ON s.user_id = e.user_id AND s.book_id = e.book_id
+               WHERE e.user_id = ?1 AND e.book_id = ?2"#,
+            self.user_id,
+            id
+        )
+        .fetch_optional(&self.db.read)
+        .await?;
+        Ok(row.map(|row| {
+            (
+                Reading::from_row(&row.read_status, row.read_percent),
+                row.on_device,
+            )
+        }))
+    }
+
+    /// Takes a book in this user's library off their readers, or puts it
+    /// back. It stays in the library either way, with its places. Their
+    /// readers remove it, or get it again, at their next sync.
+    pub async fn set_on_device(&self, book: Uuid, on: bool) -> Result<(), BookError> {
+        let mut tx = self.db.write.begin().await?;
+        let id = book.to_string();
+        let entry = sqlx::query!(
+            r#"SELECT on_device AS "on_device!: bool" FROM library_entries
+               WHERE user_id = ?1 AND book_id = ?2"#,
+            self.user_id,
+            id
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(BookError::NotFound)?;
+        if entry.on_device != on {
+            let seq = next_seq(&mut tx, self.user_id).await?;
+            sqlx::query!(
+                "UPDATE library_entries SET on_device = ?1, change_seq = ?2
+                 WHERE user_id = ?3 AND book_id = ?4",
+                on,
+                seq,
+                self.user_id,
+                id
+            )
+            .execute(&mut *tx)
+            .await?;
+            if on {
+                // Places go out again, after the book, so a reader getting
+                // it back opens it where it was left. Each its own number,
+                // as changes are paged by them.
+                let seq = next_seq(&mut tx, self.user_id).await?;
+                sqlx::query!(
+                    "UPDATE reader_places SET change_seq = ?1 WHERE user_id = ?2 AND book_id = ?3",
+                    seq,
+                    self.user_id,
+                    id
+                )
+                .execute(&mut *tx)
+                .await?;
+                let seq = next_seq(&mut tx, self.user_id).await?;
+                sqlx::query!(
+                    "UPDATE kobo_reading_states SET change_seq = ?1
+                     WHERE user_id = ?2 AND book_id = ?3",
+                    seq,
+                    self.user_id,
+                    id
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn reading_state(&self, book: Uuid) -> Result<Option<ReadingStateRow>, sqlx::Error> {
         let mut conn = self.db.read.acquire().await?;
         fetch_state(&mut conn, self.user_id, &book.to_string()).await
@@ -248,15 +359,21 @@ impl UserScope {
             r#"SELECT kind AS "kind!: String", id AS "id!: String", seq AS "seq!: i64" FROM (
                    SELECT 'book' AS kind, book_id AS id, change_seq AS seq FROM library_entries
                     WHERE user_id = ?1 AND change_seq > ?3 AND first_seq IS NOT NULL
+                      AND on_device = 1
                    UNION ALL
                    SELECT 'tombstone', book_id, change_seq FROM book_tombstones
                     WHERE user_id = ?1 AND change_seq > ?3 AND first_seq <= ?3
+                   UNION ALL
+                   -- Taken off the user's devices, but still in their library.
+                   SELECT 'tombstone', book_id, change_seq FROM library_entries
+                    WHERE user_id = ?1 AND change_seq > ?3 AND first_seq <= ?3
+                      AND on_device = 0
                    UNION ALL
                    SELECT 'state', s.book_id, s.change_seq
                      FROM kobo_reading_states s
                      JOIN library_entries e ON e.user_id = s.user_id AND e.book_id = s.book_id
                     WHERE s.user_id = ?1 AND s.change_seq > ?3
-                      AND e.first_seq IS NOT NULL
+                      AND e.first_seq IS NOT NULL AND e.on_device = 1
                       AND (e.first_seq <= ?2 OR e.change_seq < s.change_seq)
                ) ORDER BY seq LIMIT ?4"#,
             self.user_id,

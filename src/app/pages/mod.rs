@@ -258,12 +258,16 @@ fn BookTile(card: BookCard, #[prop(optional)] children: Option<Children>) -> imp
         None => view! { <span class="no-cover">{card.title.clone()}</span> }.into_any(),
     };
     let preparing = card.kepub_state == "pending";
+    let reading = card.reading().shown();
+    let off_kobo = card.in_library && !card.on_device;
     view! {
         <li class="book">
             // The title below links to the same place, so this one is for the mouse only.
             <a class="cover" href=href.clone() tabindex="-1" aria-hidden="true">{picture}</a>
             <a class="title" href=href>{card.title}</a>
             <span class="authors">{authors}</span>
+            {reading.map(|reading| view! { <span class="reading">{reading}</span> })}
+            {off_kobo.then(|| view! { <span class="note">"Not on your Kobo"</span> })}
             {preparing.then(|| view! {
                 <span class="badge">"Getting it ready for your Kobo"</span>
             })}

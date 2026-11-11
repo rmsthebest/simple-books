@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE reader_places SET change_seq = ?1 WHERE user_id = ?2 AND book_id = ?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "6e407781636c431f0a6cd46a650a78b6ef96a62576272766e0f3e11b300d4d94"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT on_device AS \"on_device!: bool\" FROM library_entries\n               WHERE user_id = ?1 AND book_id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "on_device!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "library_entries",
+            "name": "on_device"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fe80e89a5c329154ffbc2f05f8c90b773c06e0930705650bcb22d80ffd32560e"
+}

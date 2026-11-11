@@ -9,7 +9,10 @@ use super::{Layout, human_size, not_found_view, server_error, signed_in};
 use crate::{
     app::cover_picker::CoverPicker,
     server::{
-        db::{hardcover::BookLink, models::BookRow},
+        db::{
+            hardcover::BookLink,
+            models::{BookRow, Reading},
+        },
         hardcover::rules::book_link,
     },
 };
@@ -64,10 +67,14 @@ pub fn BookPage() -> impl IntoView {
                             Ok(link) => link,
                             Err(error) => return server_error(&error),
                         };
+                        let reading = match scope.reading(id).await {
+                            Ok(reading) => reading,
+                            Err(error) => return server_error(&error),
+                        };
                         let editable = book.editable_by(user_id, is_admin);
                         let mine = book.owner_id == user_id;
                         view! {
-                            <BookDetails book=book editable=editable mine=mine others=others hardcover=hardcover />
+                            <BookDetails book=book editable=editable mine=mine others=others hardcover=hardcover reading=reading />
                         }
                         .into_any()
                     })}
@@ -84,6 +91,9 @@ fn BookDetails(
     mine: bool,
     others: i64,
     hardcover: Option<BookLink>,
+    /// How far through it this user is, and whether it's on their Kobo, if
+    /// it's in their library.
+    reading: Option<(Reading, bool)>,
 ) -> impl IntoView {
     let id = book.id.clone();
     let authors = book.authors().join(", ");
@@ -95,11 +105,14 @@ fn BookDetails(
         None => series.clone(),
     });
     let in_library = book.first_seq.is_some() || mine;
+    let on_device = reading.is_none_or(|(_, on)| on);
     let on_kobo = match book.kepub_state.as_str() {
+        _ if !on_device => "Not on your Kobo.",
         "pending" => "Getting it ready for your Kobo.",
         "failed" => "Your Kobo will get this as a plain EPUB, because it couldn't be converted.",
         _ => "Ready for your Kobo.",
     };
+    let reading_said = reading.and_then(|(reading, _)| reading.shown());
     let size = human_size(book.original_size);
     let visibility = if book.visibility == "shared" {
         "Shared with everyone"
@@ -115,9 +128,22 @@ fn BookDetails(
                 <p class="authors">{authors}</p>
                 {series.map(|series| view! { <p class="muted">{series}</p> })}
                 {book.description.clone().map(|text| view! { <p class="description">{text}</p> })}
+                {reading_said.map(|said| view! { <p class="reading">{said}</p> })}
                 <p class="muted">{visibility} " · " {size} " · " {on_kobo}</p>
                 <div class="actions">
                     <a class="button quiet" href=format!("/books/{id}/download")>"Download EPUB"</a>
+                    {(mine && reading.is_some()).then(|| {
+                        let (path, label) = if on_device {
+                            ("off-kobo", "Remove from my Kobo")
+                        } else {
+                            ("on-kobo", "Put back on my Kobo")
+                        };
+                        view! {
+                            <form method="post" action=format!("/books/{id}/{path}")>
+                                <button class="quiet" type="submit">{label}</button>
+                            </form>
+                        }
+                    })}
                     {(!mine).then(|| {
                         let (path, label) = if in_library {
                             ("remove", "Remove from my Kobo")

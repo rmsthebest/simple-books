@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE kobo_reading_states SET change_seq = ?1\n                     WHERE user_id = ?2 AND book_id = ?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "3aafdebee421e6bd79dd8b01aafef2e67c19f32985625b766d381a96b39735a4"
+}

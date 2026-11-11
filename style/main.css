@@ -201,6 +201,18 @@ main.narrow { max-width: 24rem; margin: 3rem auto; }
 .authors { color: var(--muted); font-size: .9rem; overflow-wrap: anywhere; }
 .by, .badge { font-size: .85rem; }
 .badge { color: var(--warning); }
+.reading { font-size: .85rem; color: var(--accent); }
+.book-page .reading { font-size: 1rem; }
+.note { font-size: .85rem; color: var(--muted); }
+nav.show ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem 1rem;
+}
+nav.show a[aria-current] { font-weight: 600; color: var(--fg); text-decoration: none; }
 .empty { margin: 2rem 0; text-align: center; }
 .usage { margin-top: 2rem; font-size: .9rem; }
 

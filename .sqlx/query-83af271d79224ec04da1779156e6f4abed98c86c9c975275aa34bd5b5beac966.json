@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT p.change_seq, p.book_id, p.chapter, p.block, p.offset_chars, p.revision,\n                    p.percent, p.status, p.read_at\n             FROM reader_places p\n             JOIN library_entries e ON e.user_id = p.user_id AND e.book_id = p.book_id\n             WHERE p.user_id = ?1 AND p.change_seq > ?2 AND e.first_seq IS NOT NULL\n             ORDER BY p.change_seq LIMIT ?3",
+  "query": "SELECT p.change_seq, p.book_id, p.chapter, p.block, p.offset_chars, p.revision,\n                    p.percent, p.status, p.read_at\n             FROM reader_places p\n             JOIN library_entries e ON e.user_id = p.user_id AND e.book_id = p.book_id\n             WHERE p.user_id = ?1 AND p.change_seq > ?2 AND e.first_seq IS NOT NULL\n               AND e.on_device = 1\n             ORDER BY p.change_seq LIMIT ?3",
   "describe": {
     "columns": [
       {
@@ -118,5 +118,5 @@
       false
     ]
   },
-  "hash": "8935410d535739cff67c639bc3145ddea67e1c9a92b001f28c94366d3a23d081"
+  "hash": "83af271d79224ec04da1779156e6f4abed98c86c9c975275aa34bd5b5beac966"
 }

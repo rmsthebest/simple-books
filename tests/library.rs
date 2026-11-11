@@ -1633,3 +1633,32 @@ async fn a_book_the_reader_cant_have_still_reaches_the_kobo() {
     let synced = server.sync(&token, None).await.json();
     assert_eq!(synced.as_array().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn a_book_off_the_kobo_leaves_nickels_library_and_comes_back() {
+    let server = TestServer::start().await;
+    let (scope, token): (UserScope, String) = server.user("ann").await;
+    let book = server.add_book(&scope, "Done With").await;
+    let synced = server.sync(&token, None).await;
+    assert_eq!(sync_ids(&synced), [book.to_string()]);
+    let cursor = synced.header("x-kobo-synctoken").unwrap().to_owned();
+
+    scope.set_on_device(book, false).await.unwrap();
+    let off = server.sync(&token, Some(&cursor)).await;
+    let reply = off.json();
+    assert_eq!(
+        reply[0]["ChangedEntitlement"]["BookEntitlement"]["IsRemoved"],
+        true
+    );
+    let cursor = off.header("x-kobo-synctoken").unwrap().to_owned();
+    assert!(
+        scope.library_book(book).await.unwrap().is_some(),
+        "still in the library"
+    );
+
+    scope.set_on_device(book, true).await.unwrap();
+    let back = server.sync(&token, Some(&cursor)).await;
+    assert!(sync_ids(&back).contains(&book.to_string()));
+    let fresh = server.sync(&token, None).await;
+    assert_eq!(sync_ids(&fresh), [book.to_string()]);
+}

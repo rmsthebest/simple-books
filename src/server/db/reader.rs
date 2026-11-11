@@ -99,6 +99,7 @@ impl UserScope {
                       e.added_at
                FROM library_entries e JOIN books b ON b.id = e.book_id
                WHERE e.user_id = ?1 AND e.change_seq > ?2 AND e.first_seq IS NOT NULL
+                 AND e.on_device = 1
                ORDER BY e.change_seq LIMIT ?3"#,
             user_id,
             since,
@@ -123,10 +124,15 @@ impl UserScope {
                 }),
             )
         }));
+        // Gone from the library, or taken off the user's readers.
         let removed = sqlx::query!(
-            "SELECT change_seq, book_id FROM book_tombstones
-             WHERE user_id = ?1 AND change_seq > ?2 AND first_seq <= ?2
-             ORDER BY change_seq LIMIT ?3",
+            r#"SELECT change_seq AS "change_seq!: i64", book_id AS "book_id!: String" FROM (
+                   SELECT change_seq, book_id FROM book_tombstones
+                    WHERE user_id = ?1 AND change_seq > ?2 AND first_seq <= ?2
+                   UNION ALL
+                   SELECT change_seq, book_id FROM library_entries
+                    WHERE user_id = ?1 AND change_seq > ?2 AND first_seq <= ?2 AND on_device = 0
+               ) ORDER BY change_seq LIMIT ?3"#,
             user_id,
             since,
             fetch
@@ -144,6 +150,7 @@ impl UserScope {
              FROM reader_places p
              JOIN library_entries e ON e.user_id = p.user_id AND e.book_id = p.book_id
              WHERE p.user_id = ?1 AND p.change_seq > ?2 AND e.first_seq IS NOT NULL
+               AND e.on_device = 1
              ORDER BY p.change_seq LIMIT ?3",
             user_id,
             since,

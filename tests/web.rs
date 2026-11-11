@@ -964,6 +964,75 @@ mod permissions {
     }
 
     #[tokio::test]
+    async fn finished_books_come_off_the_kobo_and_back() {
+        use simple_books::server::{db::reader::PlaceRow, reader::install};
+
+        let w = world().await;
+        let (scope, cookie) = &w.uploader;
+        let book = w.private;
+        let db = &w.server.state.db;
+        install::install(db, "http://books", scope.user_id())
+            .await
+            .unwrap();
+        let reader = db.list_devices(scope.user_id()).await.unwrap()[0].id;
+        let finished = PlaceRow {
+            book_id: book.to_string(),
+            chapter: 9,
+            block: 0,
+            offset_chars: 0,
+            revision: 1,
+            percent: 100.0,
+            status: "finished".to_owned(),
+            read_at: simple_books::server::now(),
+        };
+        scope
+            .put_reader_place(book, reader, &finished)
+            .await
+            .unwrap();
+
+        let library = html(&page(&w.server, "/", cookie).await);
+        let tile = library
+            .split("class=\"reading\"")
+            .nth(1)
+            .unwrap_or_default();
+        assert!(tile.starts_with(">Finished<"), "{library}");
+        let done = html(&page(&w.server, "/?show=finished", cookie).await);
+        assert!(done.contains("Private Book") && !done.contains("Shared Book"));
+        assert!(done.contains("Remove from my Kobo"));
+
+        let path = format!("/books/{book}/off-kobo");
+        assert_eq!(
+            post(&w.server, &path, &w.other.1, &[("back", "finished")])
+                .await
+                .status,
+            404,
+            "someone else's"
+        );
+        let off = post(&w.server, &path, cookie, &[("back", "finished")]).await;
+        assert_eq!(location(&off), "/?show=finished&done=off_kobo");
+        let off_list = html(&page(&w.server, "/?show=off", cookie).await);
+        assert!(off_list.contains("Private Book") && off_list.contains("Not on your Kobo"));
+        assert!(off_list.contains("Put back on my Kobo"));
+        let book_page = html(&page(&w.server, &format!("/books/{book}"), cookie).await);
+        assert!(book_page.contains("Put back on my Kobo"));
+        assert!(
+            book_page.contains("class=\"reading\">Finished<"),
+            "{book_page}"
+        );
+
+        let on = post(
+            &w.server,
+            &format!("/books/{book}/on-kobo"),
+            cookie,
+            &[("back", "off")],
+        )
+        .await;
+        assert_eq!(location(&on), "/?show=off&done=on_kobo");
+        let off_list = html(&page(&w.server, "/?show=off", cookie).await);
+        assert!(!off_list.contains("Private Book"));
+    }
+
+    #[tokio::test]
     async fn nobody_else_can_add_a_private_book() {
         let w = world().await;
         let path = format!("/books/{}/add", w.private);
@@ -983,6 +1052,8 @@ mod permissions {
             format!("/books/{book}/visibility"),
             format!("/books/{book}/add"),
             format!("/books/{book}/remove"),
+            format!("/books/{book}/off-kobo"),
+            format!("/books/{book}/on-kobo"),
             format!("/books/{book}/delete"),
             format!("/books/{book}/cover"),
             "/books/upload".to_owned(),

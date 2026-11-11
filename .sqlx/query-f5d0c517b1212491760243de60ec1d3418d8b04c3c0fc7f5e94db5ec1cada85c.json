@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT b.id AS \"id!\", b.owner_id, b.visibility, b.title, b.authors_json, b.cover_id,\n                      b.kepub_state, u.username AS shared_by,\n                      EXISTS (SELECT 1 FROM library_entries e\n                              WHERE e.book_id = b.id AND e.user_id = ?1) AS \"in_library!: bool\"\n               FROM books b JOIN users u ON u.id = b.owner_id\n               WHERE b.visibility = 'shared'\n               ORDER BY b.created_at DESC, b.title",
+  "query": "SELECT b.id AS \"id!\", b.owner_id, b.visibility, b.title, b.authors_json, b.cover_id,\n                      b.kepub_state, u.username AS shared_by,\n                      e.user_id IS NOT NULL AS \"in_library!: bool\",\n                      COALESCE(e.on_device, 0) AS \"on_device!: bool\",\n                      CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)\n                                THEN p.status\n                           WHEN s.status = 'Finished' THEN 'finished'\n                           WHEN s.status = 'Reading' THEN 'reading'\n                           ELSE 'unread' END AS \"read_status!: String\",\n                      CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)\n                                THEN p.percent\n                           ELSE s.percent END AS \"read_percent: f64\"\n               FROM books b JOIN users u ON u.id = b.owner_id\n               LEFT JOIN library_entries e ON e.book_id = b.id AND e.user_id = ?1\n               LEFT JOIN reader_places p ON p.user_id = e.user_id AND p.book_id = e.book_id\n               LEFT JOIN kobo_reading_states s ON s.user_id = e.user_id AND s.book_id = e.book_id\n               WHERE b.visibility = 'shared'\n               ORDER BY b.created_at DESC, b.title",
   "describe": {
     "columns": [
       {
@@ -96,6 +96,24 @@
         "ordinal": 8,
         "type_info": "Integer",
         "origin": "Expression"
+      },
+      {
+        "name": "on_device!: bool",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "read_status!: String",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "name": "read_percent: f64",
+        "ordinal": 11,
+        "type_info": "Float",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -110,8 +128,11 @@
       true,
       false,
       false,
-      false
+      false,
+      false,
+      true,
+      true
     ]
   },
-  "hash": "11b6e16c28d71e92f6c8c181da393725112acf725462637a1c8779a49d51eb9e"
+  "hash": "f5d0c517b1212491760243de60ec1d3418d8b04c3c0fc7f5e94db5ec1cada85c"
 }

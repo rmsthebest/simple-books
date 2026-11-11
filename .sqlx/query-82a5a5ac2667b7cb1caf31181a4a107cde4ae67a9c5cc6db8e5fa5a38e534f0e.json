@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT e.change_seq, b.id AS \"id!\", b.title, b.authors_json, b.series,\n                      b.series_index, b.cover_id, b.reader_size, b.reader_revision, b.reader_sha256,\n                      e.added_at\n               FROM library_entries e JOIN books b ON b.id = e.book_id\n               WHERE e.user_id = ?1 AND e.change_seq > ?2 AND e.first_seq IS NOT NULL\n               ORDER BY e.change_seq LIMIT ?3",
+  "query": "SELECT e.change_seq, b.id AS \"id!\", b.title, b.authors_json, b.series,\n                      b.series_index, b.cover_id, b.reader_size, b.reader_revision, b.reader_sha256,\n                      e.added_at\n               FROM library_entries e JOIN books b ON b.id = e.book_id\n               WHERE e.user_id = ?1 AND e.change_seq > ?2 AND e.first_seq IS NOT NULL\n                 AND e.on_device = 1\n               ORDER BY e.change_seq LIMIT ?3",
   "describe": {
     "columns": [
       {
@@ -142,5 +142,5 @@
       false
     ]
   },
-  "hash": "f68ad7a4b54d01670fc024855fa736a28f50b0408766dd0afb313adb9e718428"
+  "hash": "82a5a5ac2667b7cb1caf31181a4a107cde4ae67a9c5cc6db8e5fa5a38e534f0e"
 }

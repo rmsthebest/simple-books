@@ -1,0 +1,40 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.on_device AS \"on_device!: bool\",\n                      CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)\n                                THEN p.status\n                           WHEN s.status = 'Finished' THEN 'finished'\n                           WHEN s.status = 'Reading' THEN 'reading'\n                           ELSE 'unread' END AS \"read_status!: String\",\n                      CASE WHEN p.read_at IS NOT NULL AND p.read_at >= COALESCE(s.last_modified, 0)\n                                THEN p.percent\n                           ELSE s.percent END AS \"read_percent: f64\"\n               FROM library_entries e\n               LEFT JOIN reader_places p ON p.user_id = e.user_id AND p.book_id = e.book_id\n               LEFT JOIN kobo_reading_states s ON s.user_id = e.user_id AND s.book_id = e.book_id\n               WHERE e.user_id = ?1 AND e.book_id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "on_device!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "library_entries",
+            "name": "on_device"
+          }
+        }
+      },
+      {
+        "name": "read_status!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "name": "read_percent: f64",
+        "ordinal": 2,
+        "type_info": "Float",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "67b0ccb0749968fd301e6c864f8a6915abb2b95714e712bb053379f54d4a3cbd"
+}

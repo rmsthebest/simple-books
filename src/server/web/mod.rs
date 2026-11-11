@@ -36,6 +36,8 @@ pub fn router(state: &AppState) -> Router<AppState> {
         .route("/books/{id}/visibility", post(books::visibility))
         .route("/books/{id}/add", post(books::add))
         .route("/books/{id}/remove", post(books::remove))
+        .route("/books/{id}/off-kobo", post(books::off_kobo))
+        .route("/books/{id}/on-kobo", post(books::on_kobo))
         .route("/device/connect", post(devices::connect))
         .route("/device/pair", post(devices::pair))
         .route("/device/kobo-files", get(devices::kobo_files))

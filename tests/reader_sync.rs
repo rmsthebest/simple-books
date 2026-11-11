@@ -9,7 +9,7 @@ use common::{PUBLIC_URL, Reply, TestServer};
 use simple_books::server::{
     auth::device::hash_secret,
     convert::reader::REVISION,
-    db::{pairing::MAX_PENDING, reader::ReaderChange, scope::UserScope},
+    db::{models::Reading, pairing::MAX_PENDING, reader::ReaderChange, scope::UserScope},
     now,
 };
 use sync_proto::{Changes, PairStart, PairStatus, PlaceAnswer, REVISION_HEADER, Spot, Status};
@@ -638,4 +638,54 @@ async fn changes_come_a_page_at_a_time_and_can_start_over() {
     assert!(!changes(&server, &secret, again.next).await.full);
     // A cursor from the future, as after restoring a backup, starts over too.
     assert!(changes(&server, &secret, next + 1000).await.full);
+}
+
+#[tokio::test]
+async fn a_book_off_the_kobo_leaves_the_reader_and_comes_back_where_it_was() {
+    let server = TestServer::start().await;
+    let (scope, _) = server.user("sam").await;
+    let secret = paired(&server, &scope).await;
+    let book = server.add_book(&scope, "Read It").await;
+    convert(&server, book, b"the reader's file").await;
+    let first = changes(&server, &secret, 0).await;
+    assert_eq!(first.books.len(), 1);
+
+    // Finished on the reader: the website says so.
+    let finished = Spot {
+        percent: 100.0,
+        status: Status::Finished,
+        ..spot(100.0, now())
+    };
+    let reply = put_place(&server, &secret, book, &finished).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    let card = &scope.library_cards().await.unwrap()[0];
+    assert_eq!(card.reading(), Reading::Finished);
+    assert!(card.on_device);
+    let placed = changes(&server, &secret, first.next).await;
+
+    // Taken off: the reader removes it, and the library keeps it, finished.
+    scope.set_on_device(book, false).await.unwrap();
+    let off = changes(&server, &secret, placed.next).await;
+    assert_eq!(off.removed, [book.to_string()]);
+    assert!(off.books.is_empty() && off.places.is_empty());
+    let card = &scope.library_cards().await.unwrap()[0];
+    assert_eq!(card.reading(), Reading::Finished);
+    assert!(!card.on_device);
+    let again = changes(&server, &secret, 0).await;
+    assert!(
+        again.full && again.books.is_empty(),
+        "not in a run from scratch"
+    );
+    // Off twice is still off, and says nothing new.
+    scope.set_on_device(book, false).await.unwrap();
+    let unchanged: Vec<String> = changes(&server, &secret, off.next).await.removed;
+    assert_eq!(unchanged, Vec::<String>::new());
+
+    // Back on: the book comes again, then its place.
+    scope.set_on_device(book, true).await.unwrap();
+    let back = changes(&server, &secret, off.next).await;
+    assert_eq!(back.books.len(), 1);
+    assert_eq!(back.places.len(), 1);
+    assert_eq!(back.places[0].book, book.to_string());
+    assert_eq!(back.places[0].spot.status, Status::Finished);
 }

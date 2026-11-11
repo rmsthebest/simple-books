@@ -8,6 +8,10 @@ pub fn done(code: &str) -> Option<&'static str> {
         "uploaded" | "added" => SYNC_HINT,
         "deleted" => "Deleted. It leaves any Kobo holding it at its next sync.",
         "removed" => "Removed from your library. It leaves your Kobo at its next sync.",
+        "off_kobo" => {
+            "It leaves your Kobo at its next sync, and stays here, with your place in it."
+        }
+        "on_kobo" => "It's back on your Kobo at its next sync.",
         "saved" => "Saved. Your Kobo picks this up at its next sync.",
         "cover" => "Cover changed. Your Kobo picks this up at its next sync.",
         "shared" => "This book is now shared with everyone.",

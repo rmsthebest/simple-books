@@ -126,11 +126,52 @@ pub struct BookCard {
     pub kepub_state: String,
     pub shared_by: String,
     pub in_library: bool,
+    /// On the user's readers, as far as the library says; false when it's
+    /// not in their library at all.
+    pub on_device: bool,
+    /// `unread`, `reading` or `finished`: see [`Reading`].
+    pub read_status: String,
+    pub read_percent: Option<f64>,
 }
 
 impl BookCard {
     pub fn authors(&self) -> Vec<String> {
         serde_json::from_str(&self.authors_json).unwrap_or_default()
+    }
+
+    pub fn reading(&self) -> Reading {
+        Reading::from_row(&self.read_status, self.read_percent)
+    }
+}
+
+/// How far a user is through a book, from the reader or Nickel, whichever
+/// was there last.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Reading {
+    Unread,
+    /// The percent read, from 0 to 100.
+    Reading(f64),
+    Finished,
+}
+
+impl Reading {
+    /// From what the library queries say: a status of `unread`, `reading` or
+    /// `finished`, and a percent.
+    pub fn from_row(status: &str, percent: Option<f64>) -> Self {
+        match status {
+            "finished" => Self::Finished,
+            "reading" => Self::Reading(percent.unwrap_or(0.0).clamp(0.0, 100.0)),
+            _ => Self::Unread,
+        }
+    }
+
+    /// As the website puts it: "Finished", "Reading · 45%", or nothing.
+    pub fn shown(self) -> Option<String> {
+        match self {
+            Self::Unread => None,
+            Self::Reading(percent) => Some(format!("Reading · {}%", percent.round() as i64)),
+            Self::Finished => Some("Finished".to_owned()),
+        }
     }
 }
 
@@ -145,4 +186,27 @@ pub struct BookDetails {
     pub published_on: Option<String>,
     /// As an ISBN-13.
     pub isbn: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reading_reads_as_the_website_says_it() {
+        assert_eq!(Reading::from_row("unread", Some(3.0)).shown(), None);
+        assert_eq!(
+            Reading::from_row("reading", Some(44.6)).shown().as_deref(),
+            Some("Reading · 45%")
+        );
+        assert_eq!(
+            Reading::from_row("reading", None),
+            Reading::Reading(0.0),
+            "Nickel may not say how far"
+        );
+        assert_eq!(
+            Reading::from_row("finished", Some(99.0)).shown().as_deref(),
+            Some("Finished")
+        );
+    }
 }
