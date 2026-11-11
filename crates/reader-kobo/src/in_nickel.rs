@@ -31,7 +31,7 @@ const START_READER: &str = "start-reader";
 /// Left by versions that handed USB over to Nickel; removed if found.
 const USB_RETURN: &str = "usb-return";
 /// Where the Kobo keeps our plugin.
-const PLUGIN: &str = "/usr/local/Kobo/imageformats/libsimplebooks.so";
+pub(crate) const PLUGIN: &str = "/usr/local/Kobo/imageformats/libsimplebooks.so";
 /// Held while one of these runs: a Nickel restarted quickly could otherwise
 /// get two.
 const LOCK: &str = "/tmp/simple-books-in-nickel.lock";

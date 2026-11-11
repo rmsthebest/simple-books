@@ -3,7 +3,8 @@
 #
 #   target/kobo-files/.adds/simple-books/   the reader, its SSH server and
 #                                           scripts, the English–Swedish
-#                                           dictionary, and `version`
+#                                           dictionary, `version`, and the
+#                                           plugin again, for updates
 #   target/kobo-files/.kobo/Kobo.tgz        the Nickel plugin, which the
 #                                           Kobo unpacks into /usr/local/Kobo
 #                                           when it next starts
@@ -44,6 +45,10 @@ git describe --always --dirty >"${app}/version" 2>/dev/null ||
 
 cp "${plugin}" "${stage}/imageformats/libsimplebooks.so"
 chmod 755 "${stage}/imageformats/libsimplebooks.so"
+# A reader updating itself gets the app folder's files only, so the
+# plugin is there too, for it to put in place.
+cp "${plugin}" "${app}/libsimplebooks.so"
+chmod 755 "${app}/libsimplebooks.so"
 # Only the file, so unpacking leaves the folder Nickel's plugins are in as
 # it is. Owned by root, as the rest of /usr/local/Kobo is, and with no
 # timestamp, so the same build gives the same file.

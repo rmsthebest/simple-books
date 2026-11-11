@@ -11,7 +11,8 @@ use std::{
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use sync_proto::{
-    BookFile, Changes, PREFIX, PairRequest, PairStart, PairStatus, PlaceAnswer, Problem, Spot,
+    BookFile, Changes, KoboFile, KoboFiles, PREFIX, PairRequest, PairStart, PairStatus,
+    PlaceAnswer, Problem, Spot,
 };
 use ureq::{
     Agent,
@@ -157,15 +158,67 @@ impl Client {
         partial: &Path,
         stop: &AtomicBool,
     ) -> Result<(), Error> {
+        let wanted = Wanted {
+            size: file.size,
+            sha256: &file.sha256,
+        };
+        self.fetch(secret, &format!("/books/{book}"), &wanted, partial, stop)
+    }
+
+    /// The reader app's files that the server has, for updating to them:
+    /// `None` if it has none.
+    pub fn kobo_files(&self, secret: &str) -> Result<Option<KoboFiles>, Error> {
+        let response = self
+            .agent
+            .get(self.url("/kobo"))
+            .header("Authorization", bearer(secret))
+            .call()?;
+        match json(response) {
+            Ok(files) => Ok(Some(files)),
+            Err(Error::NotFound) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Downloads one of [`Client::kobo_files`] to `partial`, as
+    /// [`Client::download`] does a book.
+    pub fn kobo_file(
+        &self,
+        secret: &str,
+        file: &KoboFile,
+        partial: &Path,
+        stop: &AtomicBool,
+    ) -> Result<(), Error> {
+        let wanted = Wanted {
+            size: file.size,
+            sha256: &file.sha256,
+        };
+        self.fetch(
+            secret,
+            &format!("/kobo/{}", file.name),
+            &wanted,
+            partial,
+            stop,
+        )
+    }
+
+    fn fetch(
+        &self,
+        secret: &str,
+        path: &str,
+        file: &Wanted<'_>,
+        partial: &Path,
+        stop: &AtomicBool,
+    ) -> Result<(), Error> {
         let have = fs::metadata(partial).map_or(0, |m| m.len());
         if have > file.size {
             fs::remove_file(partial)?;
-            return self.download(secret, book, file, partial, stop);
+            return self.fetch(secret, path, file, partial, stop);
         }
         if have < file.size {
             let mut request = self
                 .agent
-                .get(self.url(&format!("/books/{book}")))
+                .get(self.url(path))
                 .header("Authorization", bearer(secret));
             if have > 0 {
                 request = request.header("Range", format!("bytes={have}-"));
@@ -212,6 +265,12 @@ impl Client {
         }
         Ok(())
     }
+}
+
+/// What a download should come to.
+struct Wanted<'a> {
+    size: u64,
+    sha256: &'a str,
 }
 
 fn bearer(secret: &str) -> String {

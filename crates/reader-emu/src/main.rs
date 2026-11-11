@@ -194,6 +194,7 @@ fn main() {
             name: "Emulator".to_owned(),
             network: Arc::new(AlwaysOnline),
             ssh: None,
+            updates: false,
         };
         session.enable_sync(setup, &mut panel, Instant::now());
     }

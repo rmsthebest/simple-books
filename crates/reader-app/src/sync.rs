@@ -93,6 +93,10 @@ pub struct SyncSetup {
     pub network: Arc<dyn Network>,
     /// SSH, where the platform has it.
     pub ssh: Option<Arc<dyn Ssh>>,
+    /// Whether the app updates itself from the server, as on the Kobo: each
+    /// sync then downloads a version the server has that this isn't (see
+    /// [`reader_sync::update`]), for [`Device::update`](crate::Device::update).
+    pub updates: bool,
 }
 
 impl std::fmt::Debug for SyncSetup {
@@ -102,6 +106,7 @@ impl std::fmt::Debug for SyncSetup {
             .field("server", &self.server)
             .field("name", &self.name)
             .field("ssh", &self.ssh.is_some())
+            .field("updates", &self.updates)
             .finish_non_exhaustive()
     }
 }
@@ -129,6 +134,11 @@ pub(crate) enum Update {
     SshOn(SshLogin),
     /// SSH didn't start; this says why.
     SshFailed(String),
+    /// After a sync: the version downloaded and ready to update to, if
+    /// there is one.
+    NewVersion(Option<String>),
+    /// Downloading an update didn't work; this says why.
+    NewVersionFailed(String),
     Done,
 }
 
@@ -251,6 +261,10 @@ pub(crate) struct Syncer {
     ssh_on: Option<SshLogin>,
     /// Why SSH last didn't start.
     ssh_problem: Option<String>,
+    /// The version downloaded and ready to update to.
+    update_ready: Option<String>,
+    /// Why the last update didn't download.
+    update_problem: Option<String>,
 }
 
 impl std::fmt::Debug for Syncer {
@@ -265,6 +279,11 @@ impl std::fmt::Debug for Syncer {
 impl Syncer {
     pub(crate) fn new(setup: SyncSetup, status: Status) -> Self {
         let paths = Paths::in_dir(&setup.dir);
+        let update_ready = if setup.updates {
+            reader_sync::update::ready(&setup.dir)
+        } else {
+            None
+        };
         Self {
             setup,
             paths,
@@ -274,7 +293,32 @@ impl Syncer {
             started: None,
             ssh_on: None,
             ssh_problem: None,
+            update_ready,
+            update_problem: None,
         }
+    }
+
+    /// The version running, if the app updates itself.
+    pub(crate) fn version(&self) -> Option<String> {
+        self.setup
+            .updates
+            .then(|| reader_sync::update::running(&self.setup.dir))
+            .flatten()
+    }
+
+    /// The version ready to update to, if one has been downloaded.
+    pub(crate) fn update_ready(&self) -> Option<&str> {
+        self.update_ready.as_deref()
+    }
+
+    /// Why the last update didn't download, if it didn't.
+    pub(crate) fn update_problem(&self) -> Option<&str> {
+        self.update_problem.as_deref()
+    }
+
+    /// The update was put in place; it's not ready any more.
+    pub(crate) fn updated(&mut self) {
+        self.update_ready = None;
     }
 
     /// Where SSH is, if the platform has it.
@@ -388,12 +432,17 @@ impl Syncer {
             return;
         }
         let paths = self.paths.clone();
+        let updates = self.setup.updates.then(|| self.setup.dir.clone());
         self.activity = Some(Activity::Connecting);
         self.started = Some(now);
         self.spawn(move |send, stop, network| {
             online(network, send, || {
                 let client = Client::new(&server);
-                sync_once(&client, &paths, &local, send, stop);
+                if sync_once(&client, &paths, &local, send, stop)
+                    && let Some(dir) = updates
+                {
+                    stage_update(&client, &paths, &dir, send, stop);
+                }
             });
         });
     }
@@ -481,6 +530,11 @@ impl Syncer {
                 Update::Unpaired => self.status.user = None,
                 Update::SshOn(login) => self.ssh_on = Some(login.clone()),
                 Update::SshFailed(why) => self.ssh_problem = Some(why.clone()),
+                Update::NewVersion(version) => {
+                    self.update_ready.clone_from(version);
+                    self.update_problem = None;
+                }
+                Update::NewVersionFailed(why) => self.update_problem = Some(why.clone()),
                 Update::Synced(_) | Update::Failed(_) => {}
                 Update::Done => {
                     self.running = None;
@@ -499,6 +553,7 @@ fn progress_text(progress: &Progress) -> String {
         Progress::Downloading { done, total, title } => {
             format!("Downloading {} of {total}: {title}", done + 1)
         }
+        Progress::Updating => "Checking for a new version of Simple Books…".to_owned(),
     }
 }
 
@@ -556,7 +611,8 @@ fn pair(client: &Client, name: &str, paths: &Paths, send: &dyn Fn(Update), stop:
                     )));
                 }
                 send(Update::Paired { user });
-                return sync_once(client, paths, &BTreeMap::new(), send, stop);
+                sync_once(client, paths, &BTreeMap::new(), send, stop);
+                return;
             }
             Ok(PairStatus::Expired) => break,
         }
@@ -578,15 +634,17 @@ fn wait(time: Duration, stop: &AtomicBool) -> bool {
     !stop.load(Ordering::Relaxed)
 }
 
+/// Syncs once. Whether it worked.
 fn sync_once(
     client: &Client,
     paths: &Paths,
     local: &BTreeMap<String, Spot>,
     send: &dyn Fn(Update),
     stop: &AtomicBool,
-) {
+) -> bool {
     let Some(secret) = paths.secret() else {
-        return send(Update::Unpaired);
+        send(Update::Unpaired);
+        return false;
     };
     let mut state = State::load(&paths.state);
     let mut progress = |progress| send(Update::Progress(progress));
@@ -599,12 +657,40 @@ fn sync_once(
         &mut progress,
         stop,
     ) {
-        Ok(report) => send(Update::Synced(report)),
+        Ok(report) => {
+            send(Update::Synced(report));
+            true
+        }
         Err(Error::NotPaired) => {
             let _ = paths.forget();
             send(Update::Unpaired);
+            false
         }
-        Err(error) => send(Update::Failed(failure(&error))),
+        Err(error) => {
+            send(Update::Failed(failure(&error)));
+            false
+        }
+    }
+}
+
+/// After a sync, downloads the version of the app the server has, if it
+/// isn't this one.
+fn stage_update(
+    client: &Client,
+    paths: &Paths,
+    dir: &std::path::Path,
+    send: &dyn Fn(Update),
+    stop: &AtomicBool,
+) {
+    let Some(secret) = paths.secret() else {
+        return;
+    };
+    send(Update::Progress(Progress::Updating));
+    match reader_sync::update::stage(client, &secret, dir, stop) {
+        Ok(version) => send(Update::NewVersion(version)),
+        // Carried on with at the next sync.
+        Err(Error::Stopped) => {}
+        Err(error) => send(Update::NewVersionFailed(failure(&error))),
     }
 }
 

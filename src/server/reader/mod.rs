@@ -6,6 +6,7 @@
 pub mod books;
 pub mod install;
 pub mod pair;
+pub mod update;
 
 use std::fmt;
 
@@ -85,6 +86,8 @@ pub fn router(state: &AppState) -> Router<AppState> {
         .route("/books/{id}", get(books::download))
         .route("/books/{id}/cover", get(books::cover))
         .route("/books/{id}/place", put(books::put_place))
+        .route("/kobo", get(update::manifest))
+        .route("/kobo/{name}", get(update::file))
         .layer(middleware::from_fn_with_state(state.clone(), authenticate));
     Router::new()
         .route("/pair", post(pair::start).get(pair::status))

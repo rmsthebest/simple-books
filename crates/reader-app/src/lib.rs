@@ -214,6 +214,12 @@ pub trait Device {
         let _ = on;
         Err("That can't change here.".to_owned())
     }
+    /// Puts the update a sync downloaded in place (see
+    /// [`reader_sync::update`]), for the platform to start once the
+    /// session returns [`Flow::Update`]. Or says why it couldn't.
+    fn update(&mut self) -> Result<(), String> {
+        Err("This can't update itself.".to_owned())
+    }
 }
 
 /// A book file where the platform keeps books.
@@ -259,6 +265,9 @@ pub enum Flow {
     /// Back to Nickel for good: the platform uninstalls the reader. The
     /// place is saved.
     Uninstall,
+    /// Start the new version [`Device::update`] put in place. The place is
+    /// saved.
+    Update,
 }
 
 /// What the reader has chosen, kept across books and restarts.
@@ -646,8 +655,18 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                     "This reader was removed on the website. Pair it again.".to_owned(),
                     device,
                 ),
+                sync::Update::NewVersion(Some(version)) => {
+                    if let Some(last) = self.syncer.as_mut().and_then(|s| s.status.last.as_mut()) {
+                        last.text = format!(
+                            "{} Simple Books {version} is ready: Settings, Kobo.",
+                            last.text
+                        );
+                    }
+                }
                 sync::Update::Done => ended = true,
                 sync::Update::Connecting
+                | sync::Update::NewVersion(None)
+                | sync::Update::NewVersionFailed(_)
                 | sync::Update::Progress(_)
                 | sync::Update::Code { .. }
                 | sync::Update::Paired { .. }
@@ -660,6 +679,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         }
         match &self.mode {
             Mode::Sync(_) => self.show_sync(device, Refresh::Partial, now),
+            Mode::Kobo(layout) if ended => {
+                let state = layout.state.clone();
+                self.show_kobo(state, device, Refresh::Partial, now);
+            }
             Mode::Home(_) if library_changed => self.go_home(device, Refresh::Partial, now),
             Mode::Library(layout) if library_changed => {
                 let page = layout.page();
@@ -1276,6 +1299,16 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         now: Instant,
     ) {
         let settings = Settings::default();
+        let mut state = state;
+        if let Some(syncer) = &self.syncer {
+            state.version = syncer.version();
+            state.update = syncer.update_ready().map(str::to_owned);
+            if state.update_said.is_none() {
+                state.update_said = syncer
+                    .update_problem()
+                    .map(|why| format!("The update didn't download: {why}"));
+            }
+        }
         let layout = kobo_page::Layout::new(settings.width, settings.height, state);
         let status = self.status_text(device, now);
         layout.draw(&mut self.screen, &mut self.ui, &status);
@@ -1303,6 +1336,13 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 return Flow::Uninstall;
             }
             Some(kobo_page::Action::Uninstall) => state.confirming = true,
+            Some(kobo_page::Action::Update) => {
+                state.confirming = false;
+                match self.update(device) {
+                    Ok(()) => return Flow::Update,
+                    Err(why) => state.update_said = Some(why),
+                }
+            }
             Some(kobo_page::Action::Back) => {
                 self.show_settings(device, Refresh::Full, now);
                 return Flow::Continue;
@@ -1313,6 +1353,31 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         }
         self.show_kobo(state, device, Refresh::Partial, now);
         Flow::Continue
+    }
+
+    /// Puts the downloaded update in place, saying so on the screen, unless
+    /// a sync is under way: it may be downloading another.
+    fn update(&mut self, device: &mut dyn Device) -> Result<(), String> {
+        let Some(syncer) = &self.syncer else {
+            return Err("There's no update.".to_owned());
+        };
+        if syncer.busy() {
+            return Err("Wait for the sync to end, then tap Update again.".to_owned());
+        }
+        let version = syncer.update_ready().unwrap_or_default().to_owned();
+        self.save(device);
+        device.update()?;
+        if let Some(syncer) = self.syncer.as_mut() {
+            syncer.updated();
+        }
+        power_page::draw_final(
+            &mut self.screen,
+            &mut self.ui,
+            "Updating",
+            &format!("Simple Books {version} starts in a moment."),
+        );
+        device.show(&self.screen, Refresh::Full);
+        Ok(())
     }
 
     /// Saves a changed setting, and passes on what the device or the guard

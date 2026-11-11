@@ -132,6 +132,9 @@ struct Fake {
     clock: u64,
     /// Whether switching on starts the reader, if that can change.
     starts_reader: Option<bool>,
+    /// Updates put in place, and why the next one fails, if it should.
+    updates: u32,
+    update_fails: Option<String>,
 }
 
 impl Device for Fake {
@@ -177,6 +180,13 @@ impl Device for Fake {
     fn set_starts_reader(&mut self, on: bool) -> Result<String, String> {
         self.starts_reader = Some(on);
         Ok(if on { "On." } else { "Off." }.to_owned())
+    }
+    fn update(&mut self) -> Result<(), String> {
+        if let Some(why) = self.update_fails.take() {
+            return Err(why);
+        }
+        self.updates += 1;
+        Ok(())
     }
 }
 
@@ -1111,6 +1121,7 @@ fn sync_screen(online: &Arc<Online>, dir: &std::path::Path) -> Run {
         name: "Test".to_owned(),
         network: Arc::new(Shared(Arc::clone(online))),
         ssh: Some(Arc::new(Shared(Arc::clone(online)))),
+        updates: false,
     };
     run.session.enable_sync(setup, &mut run.device, run.now);
     run.tap(HOME_SETTINGS.0, HOME_SETTINGS.1);
@@ -1313,7 +1324,7 @@ fn held_on_the_sleep_screen_it_asks_and_cancel_goes_back_to_the_page() {
 
 /// From settings: the Kobo screen.
 const KOBO_START_HERE: (f32, f32) = (536.0, 482.0);
-const KOBO_UNINSTALL: (f32, f32) = (536.0, 878.0);
+const KOBO_UNINSTALL: (f32, f32) = (536.0, 788.0);
 const KOBO_BACK: (f32, f32) = (536.0, 1376.0);
 
 #[test]
@@ -1351,6 +1362,71 @@ fn uninstalling_takes_a_second_tap_and_saves_the_place() {
     assert_eq!(run.tap(KOBO_UNINSTALL.0, KOBO_UNINSTALL.1), Flow::Continue);
     assert_eq!(run.tap(KOBO_UNINSTALL.0, KOBO_UNINSTALL.1), Flow::Uninstall);
     assert!(run.device.files.keys().any(|k| k.starts_with("position-")));
+}
+
+const KOBO_UPDATE: (f32, f32) = (300.0, 1376.0);
+
+/// On the Kobo screen of a reader at v1, which updates itself.
+fn on_the_kobo_screen(dir: &std::path::Path, device: Fake) -> Run {
+    if !dir.join("version").exists() {
+        std::fs::write(dir.join("version"), "v1\n").unwrap();
+    }
+    let mut run = Run::at_home(device);
+    let setup = SyncSetup {
+        dir: dir.to_owned(),
+        server: None,
+        name: "Test".to_owned(),
+        network: Arc::new(reader_app::AlwaysOnline),
+        ssh: None,
+        updates: true,
+    };
+    run.session.enable_sync(setup, &mut run.device, run.now);
+    run.tap(HOME_SETTINGS.0, HOME_SETTINGS.1);
+    run.tap(SETTINGS_KOBO.0, SETTINGS_KOBO.1);
+    run
+}
+
+/// As [`on_the_kobo_screen`], having downloaded v2.
+fn with_an_update(dir: &std::path::Path, device: Fake) -> Run {
+    std::fs::create_dir_all(dir.join("update")).unwrap();
+    std::fs::write(
+        dir.join("update/ready.json"),
+        r#"{"version":"v2","files":[]}"#,
+    )
+    .unwrap();
+    on_the_kobo_screen(dir, device)
+}
+
+#[test]
+fn update_puts_the_downloaded_version_in_place_and_leaves() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut run = with_an_update(dir.path(), Fake::default());
+    assert_eq!(run.tap(KOBO_UPDATE.0, KOBO_UPDATE.1), Flow::Update);
+    assert_eq!(run.device.updates, 1);
+}
+
+#[test]
+fn an_update_that_fails_says_why_and_stays() {
+    let dir = tempfile::tempdir().unwrap();
+    let device = Fake {
+        update_fails: Some("No room.".to_owned()),
+        ..Fake::default()
+    };
+    let mut run = with_an_update(dir.path(), device);
+    let before = run.device.last;
+    assert_eq!(run.tap(KOBO_UPDATE.0, KOBO_UPDATE.1), Flow::Continue);
+    assert_ne!(run.device.last, before, "it says why");
+    assert_eq!(run.tap(KOBO_UPDATE.0, KOBO_UPDATE.1), Flow::Update);
+}
+
+#[test]
+fn with_nothing_downloaded_there_is_no_update() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut run = on_the_kobo_screen(dir.path(), Fake::default());
+    // The whole row is Back.
+    assert_eq!(run.tap(KOBO_UPDATE.0, KOBO_UPDATE.1), Flow::Continue);
+    assert!(run.session.in_settings());
+    assert_eq!(run.device.updates, 0);
 }
 
 /// A dictionary file with "road" in it.

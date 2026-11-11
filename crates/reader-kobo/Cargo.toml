@@ -18,3 +18,4 @@ book-format = { path = "../book-format" }
 libc = "0.2"
 reader-app = { path = "../reader-app" }
 reader-core = { path = "../reader-core" }
+reader-sync = { path = "../reader-sync" }

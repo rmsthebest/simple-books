@@ -11,7 +11,8 @@
 #     restart. The next boot tries the reader again.
 # The reader itself returns at once if a finger is on the screen.
 # Connect, when plugged into a computer, shares the storage over USB and
-# comes back to the reader, without Nickel.
+# comes back to the reader, without Nickel. Update starts the new version,
+# and the last one again if the new one fails before home.
 #
 # Installed as /mnt/onboard/.adds/simple-books/boot.sh. See
 # docs/reader-kobo.md.
@@ -37,6 +38,28 @@ say() {
 # The reader exits with this when Connect is tapped: share the storage with
 # the computer, then start the reader again.
 EXIT_USB=90
+# And with this once Update, in Settings, Kobo, has put a new version in
+# place: start it. It leaves update-trying until the new version is up.
+EXIT_UPDATE=91
+
+# Puts back what the last update replaced, which it kept in previous/, when
+# the new version never got as far as home.
+roll_back() {
+    say "the update never got as far as home: back to the last version"
+    plugin=false
+    [ -f "${APP_DIR}/previous/libsimplebooks.so" ] && plugin=true
+    for old in "${APP_DIR}"/previous/*; do
+        [ -f "${old}" ] && mv -f "${old}" "${APP_DIR}/${old##*/}"
+    done
+    if [ "${plugin}" = true ]; then
+        cp -f "${APP_DIR}/libsimplebooks.so" /usr/local/Kobo/imageformats/libsimplebooks.so.new &&
+            chmod 755 /usr/local/Kobo/imageformats/libsimplebooks.so.new &&
+            mv -f /usr/local/Kobo/imageformats/libsimplebooks.so.new \
+                /usr/local/Kobo/imageformats/libsimplebooks.so
+    fi
+    rm -f "${APP_DIR}/update-trying"
+    sync
+}
 
 # Shares the storage over USB until the computer ejects it or the cable
 # comes out, from a copy of the reader in /tmp: the storage is unmounted
@@ -78,6 +101,16 @@ while :; do
     "${APP_DIR}/reader-kobo" "$@" </dev/null >/dev/null 2>&1
     status=$?
     say "reader-kobo exited with ${status}"
+    # Not --boot again: it's done what the boot needed.
+    if [ "${status}" -eq "${EXIT_UPDATE}" ]; then
+        set --
+        continue
+    fi
+    if [ -e "${APP_DIR}/update-trying" ]; then
+        roll_back
+        set --
+        continue
+    fi
     [ "${status}" -eq "${EXIT_USB}" ] || break
     share_over_usb
     set -- --after-usb

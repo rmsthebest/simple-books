@@ -7,13 +7,16 @@
 //! `KOBO_FILES` names; the server image has them built in.
 
 use std::{
+    collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use bytes::Bytes;
 use kobo_files::Entry;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::sync::OnceCell;
 
 use crate::server::{
@@ -34,27 +37,50 @@ pub struct Installed {
     pub server: String,
 }
 
-/// The Kobo files as one tar, read from disk the first time they're asked
-/// for.
+/// The Kobo files, read from disk the first time they're asked for: as
+/// one tar for the installer, and as the app folder's files for readers
+/// updating themselves.
 #[derive(Debug)]
 pub struct KoboFiles {
     dir: PathBuf,
-    tar: OnceCell<Bytes>,
+    built: OnceCell<Built>,
 }
+
+#[derive(Debug)]
+struct Built {
+    tar: Bytes,
+    app: Option<Arc<App>>,
+}
+
+/// The files in the app folder, `.adds/simple-books`, which a reader
+/// updates itself with. Each is a slice of the tar.
+#[derive(Debug)]
+pub struct App {
+    pub manifest: sync_proto::KoboFiles,
+    files: BTreeMap<String, Bytes>,
+}
+
+impl App {
+    pub fn file(&self, name: &str) -> Option<Bytes> {
+        self.files.get(name).cloned()
+    }
+}
+
+/// Where the app folder's files are in the tar.
+const APP_FOLDER: &str = ".adds/simple-books/";
 
 impl KoboFiles {
     pub fn new(dir: PathBuf) -> Self {
         Self {
             dir,
-            tar: OnceCell::new(),
+            built: OnceCell::new(),
         }
     }
 
-    /// The tar, or `None` if the folder isn't there.
-    pub async fn tar(&self) -> io::Result<Option<Bytes>> {
+    async fn built(&self) -> io::Result<Option<&Built>> {
         let dir = self.dir.clone();
         let made = self
-            .tar
+            .built
             .get_or_try_init(|| async move {
                 tokio::task::spawn_blocking(move || build(&dir))
                     .await
@@ -62,17 +88,28 @@ impl KoboFiles {
             })
             .await;
         match made {
-            Ok(tar) => Ok(Some(tar.clone())),
+            Ok(built) => Ok(Some(built)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         }
+    }
+
+    /// The tar, or `None` if the folder isn't there.
+    pub async fn tar(&self) -> io::Result<Option<Bytes>> {
+        Ok(self.built().await?.map(|built| built.tar.clone()))
+    }
+
+    /// The app folder's files, or `None` if there are none, or no
+    /// `version` among them to tell readers what they'd update to.
+    pub async fn app(&self) -> io::Result<Option<Arc<App>>> {
+        Ok(self.built().await?.and_then(|built| built.app.clone()))
     }
 }
 
 /// Every file under `dir`, by path, but with `.kobo/Kobo.tgz` last: the
 /// Kobo installs the plugin from it when it next starts, so the installer
 /// writes it only once the rest is there.
-fn build(dir: &Path) -> io::Result<Bytes> {
+fn build(dir: &Path) -> io::Result<Built> {
     let mut found = Vec::new();
     walk(dir, "", &mut found)?;
     if found.is_empty() {
@@ -87,14 +124,50 @@ fn build(dir: &Path) -> io::Result<Bytes> {
             bytes,
         })
         .collect();
-    let tar = kobo_files::write(&entries).map_err(io::Error::other)?;
+    let tar = Bytes::from(kobo_files::write(&entries).map_err(io::Error::other)?);
+    let app = app(&tar)?;
     tracing::info!(
         files = entries.len(),
         bytes = tar.len(),
+        version = app.as_ref().map(|app| app.manifest.version.as_str()),
         dir = %dir.display(),
         "Kobo files ready to install"
     );
-    Ok(Bytes::from(tar))
+    Ok(Built { tar, app })
+}
+
+/// The app folder's files in `tar`, with what they're checked against.
+fn app(tar: &Bytes) -> io::Result<Option<Arc<App>>> {
+    let mut files = BTreeMap::new();
+    let mut manifest = Vec::new();
+    for entry in kobo_files::read(tar).map_err(io::Error::other)? {
+        let Some(name) = entry.path.strip_prefix(APP_FOLDER) else {
+            continue;
+        };
+        if !sync_proto::is_kobo_file_name(name) {
+            continue;
+        }
+        manifest.push(sync_proto::KoboFile {
+            name: name.to_owned(),
+            size: entry.bytes.len() as u64,
+            sha256: hex::encode(Sha256::digest(entry.bytes)),
+        });
+        files.insert(name.to_owned(), tar.slice_ref(entry.bytes));
+    }
+    let Some(version) = files
+        .get("version")
+        .map(|bytes| String::from_utf8_lossy(bytes).trim().to_owned())
+        .filter(|version| !version.is_empty())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(Arc::new(App {
+        manifest: sync_proto::KoboFiles {
+            version,
+            files: manifest,
+        },
+        files,
+    })))
 }
 
 fn walk(dir: &Path, under: &str, found: &mut Vec<(String, u32, Vec<u8>)>) -> io::Result<()> {
@@ -173,6 +246,42 @@ mod tests {
         // Read once, then kept.
         fs::write(app.join("version"), b"v2\n").unwrap();
         assert_eq!(files.tar().await.unwrap().unwrap(), tar);
+    }
+
+    #[tokio::test]
+    async fn readers_get_the_app_folder_with_its_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join(".adds/simple-books");
+        fs::create_dir_all(app.join("books")).unwrap();
+        fs::create_dir_all(dir.path().join(".kobo")).unwrap();
+        fs::write(dir.path().join(".kobo/Kobo.tgz"), b"plugin").unwrap();
+        fs::write(app.join("reader-kobo"), b"reader").unwrap();
+        fs::write(app.join("books/not-this"), b"x").unwrap();
+        fs::write(app.join("empty"), b"").unwrap();
+
+        let files = KoboFiles::new(dir.path().to_owned());
+        assert!(
+            files.app().await.unwrap().is_none(),
+            "no version, no update"
+        );
+
+        fs::write(app.join("version"), b"v1\n").unwrap();
+        let files = KoboFiles::new(dir.path().to_owned());
+        let found = files.app().await.unwrap().unwrap();
+        assert_eq!(found.manifest.version, "v1");
+        let names: Vec<&str> = found
+            .manifest
+            .files
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(names, ["empty", "reader-kobo", "version"]);
+        let reader = &found.manifest.files[1];
+        assert_eq!(reader.size, 6);
+        assert_eq!(reader.sha256, hex::encode(Sha256::digest(b"reader")));
+        assert_eq!(found.file("reader-kobo").unwrap(), &b"reader"[..]);
+        assert_eq!(found.file("empty").unwrap(), &b""[..]);
+        assert!(found.file("Kobo.tgz").is_none());
     }
 
     #[tokio::test]

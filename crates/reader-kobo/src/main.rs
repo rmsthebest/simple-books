@@ -46,6 +46,10 @@
 //!   from `/tmp` with `--usb` to share the storage ([`usb`]), then starts it
 //!   again with `--after-usb`, which doesn't offer again until the cable's
 //!   been out.
+//! - **Updates:** each sync downloads the version of the app the server
+//!   has, if it isn't this one, and Settings, Kobo offers to update to it.
+//!   Update puts the files in place and exits with [`update::EXIT_UPDATE`]
+//!   for the script to start the new version ([`update`]).
 #![deny(unsafe_code)]
 #![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
@@ -54,6 +58,7 @@ mod in_nickel;
 mod input;
 mod online;
 mod sys;
+mod update;
 mod usb;
 
 use std::{
@@ -182,6 +187,10 @@ fn main() {
             log!("sharing the storage over USB");
             std::process::exit(usb::EXIT_USB);
         }
+        Ok(Flow::Update) => {
+            log!("starting the new version");
+            std::process::exit(update::EXIT_UPDATE);
+        }
         Ok(Flow::Uninstall) => {
             // in-nickel does it, once Nickel has started.
             request(&dir, in_nickel::UNINSTALL);
@@ -246,11 +255,13 @@ fn run(dir: &Path, boot: bool, after_usb: bool) -> io::Result<Flow> {
         name: "Kobo Clara BW".to_owned(),
         network: Arc::new(online::Wifi::new(dir)),
         ssh: Some(Arc::new(online::KoboSsh::new(dir))),
+        updates: true,
     };
     session.enable_sync(setup, &mut kobo, Instant::now());
     if boot {
         booted(dir);
     }
+    update::settled(dir);
     // Just back from the computer, with the cable still in: it was ejected
     // there, so don't ask again until it's plugged in again.
     if inputs.computer && !after_usb {

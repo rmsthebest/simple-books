@@ -25,6 +25,7 @@ its own SSH server.
 | `.adds/simple-books/dict-en-sv` | `crates/dictionary/data/folkets_en_sv_public.xml.gz`, converted by the build | The English–Swedish dictionary, from [Folkets lexikon](https://folkets-lexikon.csc.kth.se/folkets/) (KTH), CC BY-SA 2.5 |
 | `.adds/simple-books/version` | `git describe`, by the build | Which build is installed |
 | `/usr/local/Kobo/imageformats/libsimplebooks.so` | `crates/kobo-plugin`, through `.kobo/Kobo.tgz` | The Nickel plugin: starts the helper beside Nickel (see [How it's started](#how-its-started)) |
+| `.adds/simple-books/libsimplebooks.so` | the same | The plugin again, which [updates](#updates) put in place |
 | `.adds/simple-books/books/*.book` | made by the server, or by hand (below) | Books, on the home screen |
 
 The reader also writes, in `.adds/simple-books/`:
@@ -49,6 +50,9 @@ The reader also writes, in `.adds/simple-books/`:
 - `boot-started`: there from when `boot.sh` starts the reader until it reaches home or
   returns;
 - `ssh-host-key`: the SSH server's key, made the first time it starts;
+- `update/`: a new version downloaded by a sync, until Update puts it in place;
+  `previous/`: what the last update replaced; `update-trying`: there from when an update
+  is put in place until the new version reaches home (see [Updates](#updates));
 - `install-boot`, `start-reader` and `uninstall`: requests for the helper
   beside Nickel, each removed once it's acted on.
 
@@ -154,7 +158,8 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   it on again.
 - **The Kobo screen**, from Settings, has **Start Simple Books when switched on** and
   **Uninstall Simple Books** (see [Booting into the reader](#booting-into-the-reader) and
-  [Remove it](#if-something-goes-wrong)).
+  [Remove it](#if-something-goes-wrong)). It says which version is installed, and once a
+  sync has downloaded a new one, **Update** starts it (see [Updates](#updates)).
 - **Sleep** with a short press of the power button, or by leaving it alone for 10
   minutes. The sleep screen, the cover of the book you're reading, comes up at once (a
   book without a cover leaves the page up with "Asleep" along the bottom), and the Kobo
@@ -270,6 +275,24 @@ comes out. Then it runs `usb-gadget stop storage`, writes what it would have log
 `reader.log`, and the script starts the reader again with `--after-usb`. If the storage
 can't be handed over, it says so and the reader comes back; `logread` shows what
 `usb-gadget` found still open.
+
+## Updates
+
+Each sync also asks the server for the reader's files (`GET /device/v1/kobo`): those it
+would install, with their sizes and SHA-256s. If their `version` isn't the one installed,
+the sync downloads the files that differ into `update/` and checks each one. Settings,
+Kobo then says which version is ready and shows **Update**, and the sync screen's last
+result mentions it. Nothing changes until Update is tapped. The server is trusted as it is
+for books: over HTTPS, with the reader's secret.
+
+**Update** moves each downloaded file over the one it replaces, keeping that in
+`previous/`, puts the plugin in `/usr/local/Kobo/imageformats/` (Nickel keeps using the
+old one until it restarts), and leaves `update-trying`. The reader exits with status 91,
+and `reader.sh` or `boot.sh` starts it again, which is the new version. That removes
+`update-trying` once home is up. If the new version exits before then, the script puts
+`previous/` back, plugin included, and starts the old version; `reader.log` says so.
+
+So updating a Kobo is updating the server: a new image has the new Kobo files built in.
 
 ## If something goes wrong
 

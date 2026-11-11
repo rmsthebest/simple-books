@@ -126,6 +126,10 @@ name = "reader_sync"
 required-features = ["ssr"]
 
 [[test]]
+name = "reader_update"
+required-features = ["ssr"]
+
+[[test]]
 name = "reader_client"
 required-features = ["ssr"]
 

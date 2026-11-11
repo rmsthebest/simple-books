@@ -180,6 +180,7 @@ fn start(dir: &Path, url: &str, device: &mut Disk) -> Session<fs::File> {
             name: "Kobo Clara BW".to_owned(),
             network: Arc::new(AlwaysOnline),
             ssh: None,
+            updates: false,
         },
         device,
         Instant::now(),

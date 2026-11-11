@@ -180,6 +180,7 @@ fn sync_screens(run: &mut Run) {
         name: "Kobo Clara BW".to_owned(),
         network: Arc::new(AlwaysOnline),
         ssh: Some(Arc::new(StandInSsh)),
+        updates: false,
     };
     run.session.enable_sync(setup, &mut run.device, run.now);
     run.tap("sync-unpaired", 296.0, 1376.0);

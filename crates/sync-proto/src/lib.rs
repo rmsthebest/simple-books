@@ -8,6 +8,9 @@
 //!
 //! A sync sends the places that changed (`PUT books/{id}/place`), then reads
 //! [`Changes`] and downloads the files it lists (`GET books/{id}`).
+//!
+//! A reader that updates itself, as on the Kobo, also reads [`KoboFiles`]
+//! and downloads those that changed (`GET kobo/{name}`).
 
 use serde::{Deserialize, Serialize};
 
@@ -165,6 +168,37 @@ pub struct Problem {
     pub error: String,
 }
 
+/// `GET kobo`: the files of the reader app the server would install on a
+/// Kobo, so a reader can update itself. It's a 404 if the server has none.
+/// Each file is then `GET kobo/{name}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KoboFiles {
+    /// What the `version` file among them says, such as `v0.2.1`.
+    pub version: String,
+    pub files: Vec<KoboFile>,
+}
+
+/// One file of the app folder, `.adds/simple-books` on the Kobo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KoboFile {
+    /// A plain file name, such as `reader-kobo`: see [`is_kobo_file_name`].
+    pub name: String,
+    pub size: u64,
+    /// Hex.
+    pub sha256: String,
+}
+
+/// Whether `name` may be one of [`KoboFiles`]: a plain file name in the
+/// app folder, not hidden, and not a way out of it.
+pub fn is_kobo_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +233,20 @@ mod tests {
             serde_json::from_str::<PairStatus>(r#"{"state":"pending"}"#).unwrap(),
             PairStatus::Pending
         );
+    }
+
+    #[test]
+    fn kobo_file_names_stay_in_the_app_folder() {
+        for good in [
+            "reader-kobo",
+            "dict-en-sv",
+            "reader.sh",
+            "libsimplebooks.so",
+        ] {
+            assert!(is_kobo_file_name(good), "{good}");
+        }
+        for bad in ["", ".", "..", "../x", "a/b", ".hidden", "a\\b", "a b"] {
+            assert!(!is_kobo_file_name(bad), "{bad}");
+        }
     }
 }

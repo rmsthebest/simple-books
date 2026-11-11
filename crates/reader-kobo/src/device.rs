@@ -186,6 +186,10 @@ impl Device for Kobo {
         }
     }
 
+    fn update(&mut self) -> Result<(), String> {
+        crate::update::apply(&self.dir)
+    }
+
     fn save(&mut self, name: &str, bytes: &[u8]) {
         if let Err(error) = save_atomically(&self.dir.join(name), bytes) {
             log!("saving {name}: {error}");

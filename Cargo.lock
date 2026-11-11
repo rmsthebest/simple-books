@@ -3631,6 +3631,7 @@ dependencies = [
  "libc",
  "reader-app",
  "reader-core",
+ "reader-sync",
 ]
 
 [[package]]

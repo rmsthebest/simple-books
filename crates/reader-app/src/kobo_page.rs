@@ -1,5 +1,6 @@
 //! The Kobo screen, from settings: whether Simple Books starts when the
-//! Kobo is switched on, and uninstalling it.
+//! Kobo is switched on, uninstalling it, and updating it to the version
+//! a sync downloaded.
 
 use reader_core::{Canvas, Typesetter};
 
@@ -10,6 +11,8 @@ pub(crate) enum Action {
     /// Start Simple Books when switched on, or Nickel.
     StartHere,
     Uninstall,
+    /// Start the version downloaded.
+    Update,
     Back,
 }
 
@@ -22,6 +25,12 @@ pub(crate) struct State {
     pub said: Option<String>,
     /// Uninstall was tapped once; a second tap does it.
     pub confirming: bool,
+    /// The version running, where it updates itself.
+    pub version: Option<String>,
+    /// The version downloaded, ready to update to.
+    pub update: Option<String>,
+    /// Why updating didn't work.
+    pub update_said: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,7 +42,7 @@ pub(crate) struct Layout {
 const TEXT_TOP: f32 = HEADER + 96.0;
 const LINE: f32 = 60.0;
 const START_TOP: f32 = HEADER + 330.0;
-const UNINSTALL_TOP: f32 = START_TOP + BUTTON_HEIGHT + 300.0;
+const UNINSTALL_TOP: f32 = START_TOP + BUTTON_HEIGHT + 210.0;
 
 const START_SAID: &str = "When this is on, the Kobo opens Simple Books when it's switched on, \
      instead of Nickel. To get Nickel once, keep a finger on the screen while it starts.";
@@ -61,15 +70,35 @@ impl Layout {
             height: BUTTON_HEIGHT,
         };
         buttons.push((uninstall, Action::Uninstall));
-        let back = ui::row(
-            MARGIN,
-            height - BUTTON_HEIGHT - 24.0,
-            room,
-            BUTTON_HEIGHT,
-            &[1.0],
-        );
-        buttons.push((back[0], Action::Back));
+        // The way out at the right, Update before it.
+        let bottom = height - BUTTON_HEIGHT - 24.0;
+        if state.update.is_some() {
+            let row = ui::row(MARGIN, bottom, room, BUTTON_HEIGHT, &[1.0, 1.0]);
+            buttons.push((row[0], Action::Update));
+            buttons.push((row[1], Action::Back));
+        } else {
+            let row = ui::row(MARGIN, bottom, room, BUTTON_HEIGHT, &[1.0]);
+            buttons.push((row[0], Action::Back));
+        }
         Self { buttons, state }
+    }
+
+    /// What to say about the version, above the bottom row.
+    fn version_said(&self) -> Option<String> {
+        let state = &self.state;
+        if let Some(said) = &state.update_said {
+            return Some(said.clone());
+        }
+        let version = state.version.as_deref().unwrap_or("an unknown version");
+        match &state.update {
+            Some(update) => Some(format!(
+                "This is Simple Books {version}. {update} is downloaded: Update starts it."
+            )),
+            None if state.version.is_some() => Some(format!(
+                "This is Simple Books {version}. New versions come from your server as it syncs."
+            )),
+            None => None,
+        }
     }
 
     pub(crate) fn hit(&self, x: f32, y: f32) -> Option<Action> {
@@ -102,6 +131,15 @@ impl Layout {
             UNINSTALL_SAID,
             UNINSTALL_TOP + BUTTON_HEIGHT + GAP + LINE,
         );
+        if let Some(said) = self.version_said() {
+            let lines = ui::wrap(ui, &said, LABEL_SIZE, 400.0, room, 3);
+            let bottom = canvas.height() as f32 - BUTTON_HEIGHT - 24.0;
+            let mut y = bottom - GAP - LINE * (lines.len() as f32 - 1.0) - 12.0;
+            for line in lines {
+                ui.draw_label(canvas, &line, (MARGIN, y), LABEL_SIZE, 400.0);
+                y += LINE;
+            }
+        }
         for (rect, action) in &self.buttons {
             match action {
                 Action::StartHere => ui::toggle(
@@ -121,6 +159,7 @@ impl Layout {
                         "Uninstall Simple Books"
                     },
                 ),
+                Action::Update => ui::button(canvas, ui, *rect, "Update"),
                 Action::Back => ui::button(canvas, ui, *rect, "Back"),
             }
         }
@@ -130,6 +169,31 @@ impl Layout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_is_there_once_one_is_downloaded_with_back_at_the_right() {
+        let actions = |update: Option<&str>| {
+            let state = State {
+                version: Some("v1".into()),
+                update: update.map(str::to_owned),
+                ..State::default()
+            };
+            let layout = Layout::new(1072, 1448, state);
+            let mut bottom: Vec<(f32, Action)> = layout
+                .buttons
+                .iter()
+                .filter(|(rect, _)| rect.bottom() > 1400.0)
+                .map(|(rect, action)| (rect.left, *action))
+                .collect();
+            bottom.sort_by(|a, b| a.0.total_cmp(&b.0));
+            bottom
+                .into_iter()
+                .map(|(_, action)| action)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(actions(None), [Action::Back]);
+        assert_eq!(actions(Some("v2")), [Action::Update, Action::Back]);
+    }
 
     #[test]
     fn the_start_toggle_is_only_there_when_it_can_change() {

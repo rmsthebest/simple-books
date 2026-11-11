@@ -61,6 +61,9 @@ pub enum Progress {
         total: usize,
         title: String,
     },
+    /// Looking for, and downloading, a new version of the app: see
+    /// [`update`](crate::update).
+    Updating,
 }
 
 /// Syncs once. `local` is where the reader is in each synced book it has
