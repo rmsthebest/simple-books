@@ -1,7 +1,8 @@
 //! The simple-books reader on the Kobo Clara BW.
 //!
 //! ```sh
-//! reader-kobo [--boot] [--dir /mnt/onboard/.adds/simple-books]
+//! reader-kobo [--boot | --after-usb] [--dir /mnt/onboard/.adds/simple-books]
+//! reader-kobo --usb [--dir …]
 //! reader-kobo --restore-screen
 //! ```
 //!
@@ -40,7 +41,11 @@
 //!   needs it, through `wifi.sh` (see [`online`]). It syncs at start, on
 //!   Sync now, and on waking every half hour.
 //! - **USB:** plugged into a computer, as the kernel's device events and
-//!   `extcon` tell it, it offers to leave for Nickel, which does USB.
+//!   `extcon` tell it, it offers to connect. Connect exits with
+//!   [`usb::EXIT_USB`], and the script that started it runs a copy of this
+//!   from `/tmp` with `--usb` to share the storage ([`usb`]), then starts it
+//!   again with `--after-usb`, which doesn't offer again until the cable's
+//!   been out.
 #![deny(unsafe_code)]
 #![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
@@ -49,6 +54,7 @@ mod in_nickel;
 mod input;
 mod online;
 mod sys;
+mod usb;
 
 use std::{
     fs::{self, File, OpenOptions},
@@ -73,7 +79,7 @@ const TOUCH: &str = "/dev/input/event1";
 const POWER: &str = "/dev/input/event2";
 const COVER: &str = "/dev/input/event0";
 /// Which USB cable is in: `SDP=1` or `CDP=1` is a computer, `DCP=1` a
-/// charger. Nickel offers to connect for the first two.
+/// charger. The reader offers to connect for the first two.
 const EXTCON: &str = "/sys/class/extcon/extcon0/state";
 /// Holding the power button this long brings up the power screen, which
 /// goes to Nickel if nothing is tapped. Shorter presses sleep.
@@ -139,9 +145,9 @@ fn main() {
             .and_then(|at| args.get(at + 1))
     };
     std::panic::set_hook(Box::new(|info| log!("panic: {info}")));
-    if let Some(nickel) = after("--usb-wait") {
+    if args.iter().any(|a| a == "--usb") {
         // Opens the log itself, once the computer has given the drive back.
-        in_nickel::usb_wait(&dir, nickel);
+        usb::run(&dir);
         return;
     }
     if let Some(nickel) = after("--in-nickel") {
@@ -152,8 +158,18 @@ fn main() {
     }
     open_log(&dir);
     let boot = args.iter().any(|a| a == "--boot");
-    log!("starting{}", if boot { " at boot" } else { "" });
-    match run(&dir, boot) {
+    let after_usb = args.iter().any(|a| a == "--after-usb");
+    log!(
+        "starting{}",
+        if boot {
+            " at boot"
+        } else if after_usb {
+            " after USB"
+        } else {
+            ""
+        }
+    );
+    match run(&dir, boot, after_usb) {
         Ok(Flow::PowerOff) => {
             log!("powering off");
             std::process::exit(EXIT_POWER_OFF);
@@ -163,9 +179,8 @@ fn main() {
             std::process::exit(EXIT_RESTART);
         }
         Ok(Flow::Usb) => {
-            // in-nickel brings the reader back once it's unplugged.
-            request(&dir, in_nickel::USB_RETURN);
-            log!("back to Nickel for USB");
+            log!("sharing the storage over USB");
+            std::process::exit(usb::EXIT_USB);
         }
         Ok(Flow::Uninstall) => {
             // in-nickel does it, once Nickel has started.
@@ -204,16 +219,9 @@ pub(crate) fn open_log(dir: &Path) {
     }
 }
 
-/// Stops writing to `reader.log`, closing it.
-pub(crate) fn close_log() {
-    if let Ok(mut log) = LOG.lock() {
-        *log = None;
-    }
-}
-
 /// Runs until it's time to leave, and says why: [`Flow::Exit`] for Nickel,
 /// or to power off or restart.
-fn run(dir: &Path, boot: bool) -> io::Result<Flow> {
+fn run(dir: &Path, boot: bool, after_usb: bool) -> io::Result<Flow> {
     if boot && finger_on_screen() {
         log!("a finger on the screen at boot: Nickel instead");
         return Ok(Flow::Exit);
@@ -243,7 +251,9 @@ fn run(dir: &Path, boot: bool) -> io::Result<Flow> {
     if boot {
         booted(dir);
     }
-    if inputs.computer {
+    // Just back from the computer, with the cable still in: it was ejected
+    // there, so don't ask again until it's plugged in again.
+    if inputs.computer && !after_usb {
         session
             .handle(Event::Computer(true), Instant::now(), &mut kobo)
             .map_err(io::Error::other)?;

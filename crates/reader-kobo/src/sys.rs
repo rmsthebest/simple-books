@@ -478,13 +478,6 @@ pub(crate) fn leave_nickels_files() {
     let _ = std::env::set_current_dir("/");
 }
 
-/// Lets `file` stay open in a program this one `exec`s, so a lock held on
-/// it stays held.
-pub(crate) fn keep_across_exec(file: &File) -> io::Result<()> {
-    // SAFETY: fcntl on a descriptor this File owns.
-    check(unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) })
-}
-
 /// Makes `command` start in a session of its own, so it outlives whoever
 /// started it and gets no signals meant for them.
 pub(crate) fn own_session(command: &mut std::process::Command) {

@@ -10,6 +10,8 @@
 #     returned, because `boot-started` is still here: a hang and a forced
 #     restart. The next boot tries the reader again.
 # The reader itself returns at once if a finger is on the screen.
+# Connect, when plugged into a computer, shares the storage over USB and
+# comes back to the reader, without Nickel.
 #
 # Installed as /mnt/onboard/.adds/simple-books/boot.sh. See
 # docs/reader-kobo.md.
@@ -25,8 +27,38 @@ if [ "$(dirname -- "$0")" != "/tmp" ]; then
     exec /tmp/simple-books-boot.sh "$@"
 fi
 
+# Nothing of ours keeps a directory on the storage in use.
+cd / || exit 0
+
 say() {
     echo "$(date +%s) boot.sh: $*" >>"${LOG}"
+}
+
+# The reader exits with this when Connect is tapped: share the storage with
+# the computer, then start the reader again.
+EXIT_USB=90
+
+# Shares the storage over USB until the computer ejects it or the cable
+# comes out, from a copy of the reader in /tmp: the storage is unmounted
+# while the computer has it, which anything running from it would stop.
+share_over_usb() {
+    # Nothing of the reader's may keep using the storage. Its SSH server
+    # stops once the reader has gone, but not quite at once.
+    tries=0
+    while pkill -0 -f /simple-books-ssh && [ ${tries} -lt 20 ]; do
+        usleep 250000
+        tries=$((tries + 1))
+    done
+    pkill -KILL -f /simple-books-ssh
+    "${APP_DIR}/wifi.sh" down
+    if ! cp -f "${APP_DIR}/reader-kobo" /tmp/simple-books-usb; then
+        say "no room in /tmp to share the storage over USB"
+        return
+    fi
+    chmod 755 /tmp/simple-books-usb
+    sync
+    /tmp/simple-books-usb --usb --dir "${APP_DIR}" </dev/null >/dev/null 2>&1
+    rm -f /tmp/simple-books-usb
 }
 
 [ -f "${APP_DIR}/boot" ] || exit 0
@@ -41,9 +73,15 @@ fi
 : >"${APP_DIR}/boot-started"
 sync
 say "starting the reader"
-"${APP_DIR}/reader-kobo" --boot </dev/null >/dev/null 2>&1
-status=$?
-say "reader-kobo exited with ${status}"
+set -- --boot
+while :; do
+    "${APP_DIR}/reader-kobo" "$@" </dev/null >/dev/null 2>&1
+    status=$?
+    say "reader-kobo exited with ${status}"
+    [ "${status}" -eq "${EXIT_USB}" ] || break
+    share_over_usb
+    set -- --after-usb
+done
 # It returned, so it didn't hang. The reader removes this too, once home is
 # up.
 rm -f "${APP_DIR}/boot-started"

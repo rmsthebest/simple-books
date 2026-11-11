@@ -49,7 +49,7 @@ The reader also writes, in `.adds/simple-books/`:
 - `boot-started`: there from when `boot.sh` starts the reader until it reaches home or
   returns;
 - `ssh-host-key`: the SSH server's key, made the first time it starts;
-- `install-boot`, `start-reader`, `usb-return` and `uninstall`: requests for the helper
+- `install-boot`, `start-reader` and `uninstall`: requests for the helper
   beside Nickel, each removed once it's acted on.
 
 None of these is a format Nickel lists as a book, so its library doesn't show them.
@@ -138,11 +138,12 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   used next time you open the book, unless you're reading it. **Unpair**, tapped twice,
   stops syncing and leaves the books on the reader.
 - **USB:** plugged into a computer, the reader offers **Connect**, which saves your place
-  and leaves for Nickel, saying so while Nickel starts. Nickel then offers to connect, as
-  it always does: tap **Connect** there too. Simple
-  Books comes back a few seconds after the cable is unplugged. **Not now** goes back to where you
-  were, and it doesn't ask again until the cable is plugged in again. A charger doesn't
-  count. Plugged in while asleep, it asks on waking.
+  and gives the computer the Kobo's storage, the `KOBOeReader` drive, without Nickel.
+  Eject it on the computer, or unplug the cable, and Simple Books comes back where you
+  were, once the storage has been checked. **Not now** goes back to where you were, and
+  it doesn't ask again until the cable is plugged in again; nor does it after an eject
+  with the cable still in. A charger doesn't count. Plugged in while asleep, it asks on
+  waking. How it's done is under [USB](#usb).
 - **Power:** holding the power button for 3 seconds brings up the power screen, with
   **Power off**, **Restart**, **Go to Nickel** and **Cancel**. The place is saved first.
   Powering off leaves "Switched off" on the screen; hold the power button to switch it
@@ -229,8 +230,8 @@ Turning it off puts things back as they were. Either way the screen says what it
 
 ## How it's started
 
-The reader needs root to change `/etc/rc.local`, and has to come back after Nickel has
-run, for USB. Nickel runs as root and loads every library in
+The reader needs root to change `/etc/rc.local`, and has to start after Nickel has run,
+after a web install. Nickel runs as root and loads every library in
 `/usr/local/Kobo/imageformats/` (see [`clara-bw-hardware.md`](clara-bw-hardware.md)),
 and the Kobo installs files there from `.kobo/Kobo.tgz` when it starts. So:
 
@@ -245,14 +246,30 @@ and the Kobo installs files there from `.kobo/Kobo.tgz` when it starts. So:
   file in the app folder, and exits:
   - `uninstall`: turns booting into the reader off and removes the plugin;
   - `install-boot`: turns booting into the reader on;
-  - `start-reader`: starts `reader.sh` once Nickel has settled;
-  - `usb-return`: waits for the computer to be unplugged, then starts `reader.sh`. It
-    waits as a copy of itself in `/tmp` (`--usb-wait`), with nothing open on
-    `/mnt/onboard`, not even `reader.log`: to share the drive, Nickel has to unmount it,
-    and anything still using it leaves the computer with an empty drive.
-- **Who asks:** the website's installer writes `install-boot` and `start-reader`. The
-  reader writes `usb-return` when it hands over for USB, and `uninstall` from its Kobo
-  screen. What the helper does goes in `reader.log`.
+  - `start-reader`: starts `reader.sh` once Nickel has settled.
+
+  Anything it inherited on `/mnt/onboard` would keep Nickel from sharing the storage
+  over USB.
+- **Who asks:** the website's installer writes `install-boot` and `start-reader`, and
+  the reader writes `uninstall` from its Kobo screen. What the helper does goes in
+  `reader.log`.
+
+## USB
+
+Sharing the storage is the firmware's `/etc/init.d/usb-gadget`, as Nickel uses it:
+`start storage` turns swap off, unmounts `/mnt/onboard` and gives its partition to the
+USB gadget, and `stop storage` takes it back, checks it with `dosfsck -a` and mounts it
+again (rebooting if it can't). Unmounting fails while anything still uses
+`/mnt/onboard`, and then the computer gets an empty drive.
+
+So **Connect** makes the reader exit with status 90, and `reader.sh` or `boot.sh`,
+whichever started it, turns Wi-Fi off and runs a copy of `reader-kobo` from `/tmp`
+with `--usb`. That shows the USB screens, runs `usb-gadget start storage`, and waits
+until the computer ejects the drive (the gadget's backing file goes empty) or the cable
+comes out. Then it runs `usb-gadget stop storage`, writes what it would have logged to
+`reader.log`, and the script starts the reader again with `--after-usb`. If the storage
+can't be handed over, it says so and the reader comes back; `logread` shows what
+`usb-gadget` found still open.
 
 ## If something goes wrong
 

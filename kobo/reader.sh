@@ -2,7 +2,8 @@
 # Starts the simple-books reader in place of a running Nickel, and always
 # brings Nickel back when the reader exits, however it exits. The helper
 # our Nickel plugin starts runs it (`reader-kobo --in-nickel`), after a
-# web install and when a computer is unplugged.
+# web install. Connect, when plugged into a computer, shares the storage
+# over USB and comes back to the reader, without Nickel.
 #
 # Adapted from KOReader's platform/kobo/koreader.sh and nickel.sh
 # (AGPL-3.0), with the firmware 6 fixes from idetedi's fork recorded in
@@ -23,8 +24,38 @@ if [ "$(dirname -- "$0")" != "/tmp" ]; then
     exec /tmp/simple-books-reader.sh "$@"
 fi
 
+# Nothing of ours keeps a directory on the storage in use.
+cd / || exit 1
+
 say() {
     echo "$(date +%s) reader.sh: $*" >>"${LOG}"
+}
+
+# The reader exits with this when Connect is tapped: share the storage with
+# the computer, then start the reader again.
+EXIT_USB=90
+
+# Shares the storage over USB until the computer ejects it or the cable
+# comes out, from a copy of the reader in /tmp: the storage is unmounted
+# while the computer has it, which anything running from it would stop.
+share_over_usb() {
+    # Nothing of the reader's may keep using the storage. Its SSH server
+    # stops once the reader has gone, but not quite at once.
+    tries=0
+    while pkill -0 -f /simple-books-ssh && [ ${tries} -lt 20 ]; do
+        usleep 250000
+        tries=$((tries + 1))
+    done
+    pkill -KILL -f /simple-books-ssh
+    "${APP_DIR}/wifi.sh" down
+    if ! cp -f "${APP_DIR}/reader-kobo" /tmp/simple-books-usb; then
+        say "no room in /tmp to share the storage over USB"
+        return
+    fi
+    chmod 755 /tmp/simple-books-usb
+    sync
+    /tmp/simple-books-usb --usb --dir "${APP_DIR}" </dev/null >/dev/null 2>&1
+    rm -f /tmp/simple-books-usb
 }
 
 # Waits up to 5 s for every process named $1 to exit.
@@ -111,9 +142,14 @@ if pkill -0 nickel; then
     wifi_off
 fi
 
-"${APP_DIR}/reader-kobo" "$@" </dev/null >/dev/null 2>&1
-status=$?
-say "reader-kobo exited with ${status}"
+while :; do
+    "${APP_DIR}/reader-kobo" "$@" </dev/null >/dev/null 2>&1
+    status=$?
+    say "reader-kobo exited with ${status}"
+    [ "${status}" -eq "${EXIT_USB}" ] || break
+    share_over_usb
+    set -- --after-usb
+done
 # SSH, if the reader turned it on, went with it: the server stops when
 # the reader does.
 # Power off (88) or restart (89), from the reader's power screen. It drew

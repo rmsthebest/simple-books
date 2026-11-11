@@ -73,6 +73,7 @@ use place::SavedPlace;
 use reader_sync::{Report, Spot, Status};
 pub use shelf::Sort;
 pub use sync::{AlwaysOnline, Network, Ssh, SshLogin, SyncSetup};
+pub use usb_page::{UsbScreen, usb_screen};
 
 /// A full refresh every this many turns clears ghosting.
 pub const FULL_EVERY: u32 = 6;
@@ -252,8 +253,8 @@ pub enum Flow {
     PowerOff,
     /// Restart the device. The place is saved, and the panel says so.
     Restart,
-    /// Back to Nickel for USB, which the platform leaves again for the
-    /// reader once the computer is unplugged. The place is saved.
+    /// Share the storage with the computer over USB, then start the reader
+    /// again once it's ejected or unplugged. The place is saved.
     Usb,
     /// Back to Nickel for good: the platform uninstalls the reader. The
     /// place is saved.
@@ -333,7 +334,7 @@ enum Mode {
     Search(search::Layout),
     Settings(settings::Layout),
     Sync(sync_page::Layout),
-    /// Plugged into a computer: offering to hand over to Nickel.
+    /// Plugged into a computer: offering to share the storage with it.
     Usb {
         layout: usb_page::Layout,
         back: Back,
@@ -1654,8 +1655,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         Ok(())
     }
 
-    /// Plugged into a computer, or unplugged: offers to hand over to Nickel
-    /// for USB, unless that was turned down already, or it's asleep, in
+    /// Plugged into a computer, or unplugged: offers to share the storage
+    /// over USB, unless that was turned down already, or it's asleep, in
     /// which case it asks on waking.
     fn computer(
         &mut self,
@@ -1706,9 +1707,14 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         match layout.hit(x, y) {
             Some(usb_page::Action::Connect) => {
                 self.save(device);
-                // Nickel takes a while to come up: say what's happening.
+                // Up until the platform's USB screen replaces it.
                 let status = self.status_text(device, now);
-                usb_page::draw_leaving(&mut self.screen, &mut self.ui, &status);
+                usb_page::draw_said(
+                    &mut self.screen,
+                    &mut self.ui,
+                    UsbScreen::Connecting,
+                    &status,
+                );
                 device.show(&self.screen, Refresh::Full);
                 Ok(Flow::Usb)
             }
