@@ -11,7 +11,8 @@ use std::{
 
 use kobo_ssh::{AUTHORIZED_KEYS_FILE, Settings, host_key, serve};
 use russh::{
-    ChannelMsg,
+    ChannelMsg, MethodKind,
+    client::AuthResult,
     client::{self, Handle},
     keys::{
         PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate, ssh_key::private::Ed25519Keypair,
@@ -118,9 +119,25 @@ async fn run(
 async fn the_password_logs_in_and_commands_run() {
     let (port, _stop, _server) = start(folder("password")).await;
     let mut wrong = connect(port).await;
+    // A mistyped password can be typed again on the same connection: the
+    // server still offers passwords (OpenSSH only tries what's offered),
+    // and nothing it can't do.
+    match wrong
+        .authenticate_password("root", "abcd-efgi")
+        .await
+        .unwrap()
+    {
+        AuthResult::Failure {
+            remaining_methods, ..
+        } => assert_eq!(
+            *remaining_methods,
+            [MethodKind::Password, MethodKind::PublicKey][..]
+        ),
+        AuthResult::Success => panic!("a wrong password logged in"),
+    }
     assert!(
-        !wrong
-            .authenticate_password("root", "abcd-efgi")
+        wrong
+            .authenticate_password("root", PASSWORD)
             .await
             .unwrap()
             .success()

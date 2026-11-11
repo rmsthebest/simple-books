@@ -26,7 +26,7 @@ use std::{
 };
 
 use russh::{
-    Channel, ChannelId,
+    Channel, ChannelId, MethodKind, MethodSet,
     keys::{
         HashAlg, PrivateKey, PublicKey,
         ssh_key::{LineEnding, private::Ed25519Keypair},
@@ -43,6 +43,21 @@ pub const AUTHORIZED_KEYS_FILE: &str = "authorized_keys";
 const USER: &str = "root";
 /// Tries at logging in, per connection.
 const ATTEMPTS: usize = 4;
+
+/// The ways to log in: nothing else is offered.
+fn methods() -> MethodSet {
+    MethodSet::from(&[MethodKind::Password, MethodKind::PublicKey][..])
+}
+
+/// No: try again. russh's plain reject drops the method just tried, which
+/// would make a mistyped password end the connection; this keeps both, and
+/// `max_auth_attempts` still limits the tries.
+fn again() -> Auth {
+    Auth::Reject {
+        proceed_with_methods: Some(methods()),
+        partial_success: false,
+    }
+}
 
 /// What the server needs: where the app folder is, and the password.
 #[derive(Clone)]
@@ -159,6 +174,7 @@ pub async fn serve(
         auth_rejection_time: Duration::from_secs(1),
         auth_rejection_time_initial: Some(Duration::ZERO),
         max_auth_attempts: ATTEMPTS,
+        methods: methods(),
         inactivity_timeout: Some(Duration::from_secs(3600)),
         keys: vec![host_key],
         nodelay: true,
@@ -224,7 +240,7 @@ impl server::Handler for Client {
             Ok(Auth::Accept)
         } else {
             log!("{} gave a wrong password", self.from());
-            Ok(Auth::reject())
+            Ok(again())
         }
     }
 
