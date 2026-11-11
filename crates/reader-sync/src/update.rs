@@ -2,8 +2,9 @@
 //! install: the files of its app folder, `.adds/simple-books` on the Kobo.
 //!
 //! 1. After a sync, [`stage`] asks the server for its files. If their
-//!    `version` isn't this one's, it downloads the files that differ into
-//!    `update/`, checks each, and writes `update/ready.json` last.
+//!    `version` is newer than this one's ([`is_newer`]), it downloads the
+//!    files that differ into `update/`, checks each, and writes
+//!    `update/ready.json` last.
 //! 2. When asked to, [`apply`] moves each staged file over the one it
 //!    replaces, keeping that in `previous/`, and leaves `update-trying`.
 //!    The platform then starts the new version.
@@ -91,7 +92,7 @@ pub fn stage(
     if !offered.files.iter().any(|f| f.name == VERSION) {
         return Err(Error::Damaged("the server's files have no version".into()));
     }
-    if running(dir).as_deref() == Some(offered.version.as_str()) {
+    if running(dir).is_some_and(|running| !is_newer(&offered.version, &running)) {
         clear(dir)?;
         return Ok(None);
     }
@@ -130,6 +131,34 @@ pub fn stage(
         },
     )?;
     Ok(Some(offered.version))
+}
+
+/// Whether the server's `offered` version is newer than the `running`
+/// one, so worth updating to. Versions are a release's, such as `0.2.1`,
+/// or `git describe`'s, such as `v0.2.1-4-g1a713ba-dirty`: four commits
+/// after it, so newer than `0.2.1` and older than `0.2.2`. Where either
+/// can't be read that way, any other version counts as newer.
+pub fn is_newer(offered: &str, running: &str) -> bool {
+    match (release_and_commits(offered), release_and_commits(running)) {
+        (Some(offered), Some(running)) => offered > running,
+        _ => offered != running,
+    }
+}
+
+/// `v0.2.1-4-g1a713ba` as `([0, 2, 1], 4)`.
+fn release_and_commits(version: &str) -> Option<(Vec<u64>, u64)> {
+    let version = version.trim();
+    let version = version.strip_prefix('v').unwrap_or(version);
+    let (release, rest) = version.split_once('-').unwrap_or((version, ""));
+    let release = release
+        .split('.')
+        .map(|part| part.parse().ok())
+        .collect::<Option<Vec<u64>>>()?;
+    let commits = match rest.split('-').next() {
+        Some("" | "dirty") | None => 0,
+        Some(commits) => commits.parse().ok()?,
+    };
+    Some((release, commits))
 }
 
 /// Whether `path` holds just what `file` says.
@@ -325,6 +354,23 @@ mod tests {
         assert_eq!(settled(app).as_deref(), Some("v2"));
         assert_eq!(settled(app), None);
         assert_eq!(running(app).as_deref(), Some("v2"));
+    }
+
+    #[test]
+    fn only_a_newer_version_is_an_update() {
+        assert!(is_newer("v2", "v1"));
+        assert!(!is_newer("v1", "v1"));
+        assert!(!is_newer("v1", "v2"), "not back to an older one");
+        assert!(is_newer("0.2.2", "v0.2.1-4-g1a713ba"));
+        assert!(!is_newer("0.2.1", "v0.2.1-4-g1a713ba"), "a build after it");
+        assert!(!is_newer("0.2.1", "v0.2.1-4-g1a713ba-dirty"));
+        assert!(is_newer("v0.2.1-5-gabcdef0", "0.2.1"));
+        assert!(is_newer("0.10.0", "0.9.3"), "by number, not by letter");
+        assert!(!is_newer("0.2.1", "0.2.1-dirty"));
+        // Without a tag, git describe gives only the commit: any other
+        // version is an update, as before.
+        assert!(is_newer("0.2.1", "1a713ba"));
+        assert!(!is_newer("1a713ba", "1a713ba"));
     }
 
     #[test]

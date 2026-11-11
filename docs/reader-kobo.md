@@ -290,11 +290,15 @@ can't be handed over, it says so and the reader comes back; `logread` shows what
 ## Updates
 
 Each sync also asks the server for the reader's files (`GET /device/v1/kobo`): those it
-would install, with their sizes and SHA-256s. If their `version` isn't the one installed,
-the sync downloads the files that differ into `update/` and checks each one. The sync
-screen then shows **Update to** that version, and so does Settings, Kobo, as **Update**.
-Nothing changes until it's tapped. The server is trusted as it is
-for books: over HTTPS, with the reader's secret.
+would install, with their sizes and SHA-256s. If their `version` is newer than the one
+installed, the sync downloads the files that differ into `update/` and checks each one.
+The sync screen then shows **Update to** that version, and so does Settings, Kobo, as
+**Update**. Nothing changes until it's tapped. The server is trusted as it is for books:
+over HTTPS, with the reader's secret.
+
+A build from between releases, such as `v0.2.1-4-g1a713ba` from `git describe`, counts
+as newer than `0.2.1` and older than `0.2.2`, so a reader deployed by hand isn't offered
+the release it's ahead of. A server that goes back a version offers nothing.
 
 **Update** moves each downloaded file over the one it replaces, keeping that in
 `previous/`, puts the plugin in `/usr/local/Kobo/imageformats/` (Nickel keeps using the
