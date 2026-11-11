@@ -163,7 +163,8 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   it on again.
 - **The Kobo screen**, from Settings, has **Start Simple Books when switched on** and
   **Uninstall Simple Books** (see [Booting into the reader](#booting-into-the-reader) and
-  [Remove it](#if-something-goes-wrong)). It says which version is installed, and once a
+  [Remove it](#if-something-goes-wrong)). It says how much room is left for books and how
+  much the battery holds against when it was new, which version is installed, and once a
   sync has downloaded a new one, **Update** starts it, as it does on the sync screen (see
   [Updates](#updates)).
 - **Sleep** with a short press of the power button, or by leaving it alone for 10

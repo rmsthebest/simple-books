@@ -26,6 +26,11 @@ const BATTERY: &str = "/sys/class/power_supply/battery/capacity";
 const CHARGER: &str = "/sys/class/power_supply/ac/online";
 /// In microvolts.
 const VOLTAGE: &str = "/sys/class/power_supply/battery/voltage_now";
+/// In µAh: what it holds full now, and did new.
+const CHARGE_FULL: &str = "/sys/class/power_supply/battery/charge_full";
+const CHARGE_FULL_DESIGN: &str = "/sys/class/power_supply/battery/charge_full_design";
+/// The storage USB shows, where the books are.
+const STORAGE: &str = "/mnt/onboard";
 /// "Charging", "Discharging" or "Full".
 const STATUS: &str = "/sys/class/power_supply/battery/status";
 /// 0–100.
@@ -169,6 +174,22 @@ impl Device for Kobo {
         self.dark = on;
     }
 
+    fn about(&mut self) -> Option<String> {
+        // One line: "10.6 GB free · battery health 99%".
+        let mut said = Vec::new();
+        if let Ok((free, _)) = sys::space(STORAGE) {
+            said.push(format!("{} free", gigabytes(free)));
+        }
+        if let (Some(full), Some(new)) = (read_number(CHARGE_FULL), read_number(CHARGE_FULL_DESIGN))
+            && new > 0
+        {
+            // What it holds full now, against what it did new.
+            let health = (u64::from(full) * 100 / u64::from(new)).min(100);
+            said.push(format!("battery health {health}%"));
+        }
+        (!said.is_empty()).then(|| said.join(" · "))
+    }
+
     fn wake_at(&mut self, at: Option<u64>) -> bool {
         // An alarm that's set can't be changed, only cleared.
         if let Err(error) = fs::write(WAKE_ALARM, "0") {
@@ -258,6 +279,11 @@ pub(crate) fn battery_state() -> String {
     format!("battery {percent}%, {volts}, {}", status.trim())
 }
 
+/// Such as "10.6 GB".
+fn gigabytes(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / 1e9)
+}
+
 fn read_number(path: &str) -> Option<u32> {
     fs::read_to_string(path).ok()?.trim().parse().ok()
 }
@@ -273,6 +299,14 @@ fn utc_offset(zone: &jiff::tz::TimeZone, clock: u64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn space_is_in_gigabytes_to_a_tenth() {
+        assert_eq!(gigabytes(10_623_000_000), "10.6 GB");
+        assert_eq!(gigabytes(0), "0.0 GB");
+        let (free, total) = sys::space("/").unwrap();
+        assert!(free <= total && total > 0);
+    }
 
     #[test]
     fn saving_replaces_the_file_whole() {

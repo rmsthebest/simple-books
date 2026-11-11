@@ -208,6 +208,11 @@ pub trait Device {
     /// Sleeps, returning once awake again. False if it couldn't sleep, such
     /// as while charging.
     fn suspend(&mut self) -> bool;
+    /// A line or two about the device for the Kobo screen, such as how
+    /// much room is left for books.
+    fn about(&mut self) -> Option<String> {
+        None
+    }
     /// Shows everything after this inverted, or not, for dark mode.
     fn set_dark(&mut self, on: bool) {
         let _ = on;
@@ -1405,6 +1410,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     ) {
         let settings = Settings::default();
         let mut state = state;
+        state.about = device.about();
         if let Some(syncer) = &self.syncer {
             state.version = syncer.version();
             state.update = syncer.update_ready().map(str::to_owned);

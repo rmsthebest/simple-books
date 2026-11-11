@@ -449,6 +449,29 @@ pub(crate) fn poll(files: &[BorrowedFd<'_>], timeout: Duration) -> io::Result<Ve
 }
 
 /// Flushes every filesystem, before sleeping.
+/// The space free and in all, in bytes, on the filesystem holding `path`.
+#[allow(
+    clippy::useless_conversion,
+    reason = "the field types differ between the Kobo and a 64-bit computer"
+)]
+pub(crate) fn space(path: &str) -> io::Result<(u64, u64)> {
+    let path = std::ffi::CString::new(path).map_err(io::Error::other)?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `path` is a valid C string and `stats` has room for the
+    // answer, which is only read once the call says it's filled.
+    let stats = unsafe {
+        if libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        stats.assume_init()
+    };
+    let block = u64::from(stats.f_frsize);
+    Ok((
+        u64::from(stats.f_bavail) * block,
+        u64::from(stats.f_blocks) * block,
+    ))
+}
+
 pub(crate) fn sync() {
     // SAFETY: sync takes no arguments and can't fail.
     unsafe { libc::sync() }
