@@ -43,6 +43,13 @@ impl Canvas {
         self.pixels.fill(WHITE);
     }
 
+    /// White for black and black for white, as dark mode shows a page.
+    pub fn invert(&mut self) {
+        for pixel in &mut self.pixels {
+            *pixel = !*pixel;
+        }
+    }
+
     /// Darkens the page through an alpha mask, as black ink would.
     pub(crate) fn ink(&mut self, left: i32, top: i32, width: u32, height: u32, alpha: &[u8]) {
         self.each_row(left, top, width, height, |row, src_x, src_y, len| {

@@ -181,6 +181,7 @@ fn stepped(value: u8, up: bool, by: u8, max: u8) -> u8 {
 pub(crate) enum Toggle {
     Justify,
     Hyphenate,
+    Dark,
 }
 
 impl Toggle {
@@ -188,6 +189,7 @@ impl Toggle {
         match self {
             Toggle::Justify => p.justify = !p.justify,
             Toggle::Hyphenate => p.hyphenate = !p.hyphenate,
+            Toggle::Dark => p.dark = !p.dark,
         }
     }
 
@@ -195,6 +197,7 @@ impl Toggle {
         match self {
             Toggle::Justify => p.justify,
             Toggle::Hyphenate => p.hyphenate,
+            Toggle::Dark => p.dark,
         }
     }
 }
@@ -244,9 +247,16 @@ impl Layout {
             }
         }
         let toggles_top = ROWS_TOP + ROWS.len() as f32 * ROW + 8.0;
-        let toggles = ui::row(MARGIN, toggles_top, content, TOGGLE_HEIGHT, &[1.0, 1.0]);
+        let toggles = ui::row(
+            MARGIN,
+            toggles_top,
+            content,
+            TOGGLE_HEIGHT,
+            &[1.0, 1.0, 1.0],
+        );
         buttons.push((toggles[0], Action::Toggle(Toggle::Justify), "Justified"));
         buttons.push((toggles[1], Action::Toggle(Toggle::Hyphenate), "Hyphenated"));
+        buttons.push((toggles[2], Action::Toggle(Toggle::Dark), "Dark"));
         let bottom = ui::row(
             MARGIN,
             height - BUTTON_HEIGHT - 24.0,
@@ -478,8 +488,8 @@ mod tests {
     #[test]
     fn nothing_overlaps_and_each_button_is_what_it_shows() {
         let layout = Layout::new(1072, 1448);
-        // Two toggles, Sync, Kobo and Done.
-        assert_eq!(layout.buttons.len(), 2 * ROWS.len() + 5);
+        // Three toggles, Sync, Kobo and Done.
+        assert_eq!(layout.buttons.len(), 2 * ROWS.len() + 6);
         for (i, (rect, action, _)) in layout.buttons.iter().enumerate() {
             assert!(rect.top > PREVIEW_TOP + PREVIEW_HEIGHT, "{action:?}");
             assert!(

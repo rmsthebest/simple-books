@@ -45,6 +45,8 @@ pub(crate) struct Kobo {
     /// Nickel keeps `/etc/localtime` linked to the zone chosen in its
     /// settings.
     zone: jiff::tz::TimeZone,
+    /// Dark mode: each screen is inverted on its way to the panel.
+    dark: bool,
 }
 
 impl std::fmt::Debug for Kobo {
@@ -53,6 +55,7 @@ impl std::fmt::Debug for Kobo {
             .field("framebuffer", &self.framebuffer)
             .field("dir", &self.dir)
             .field("zone", &self.zone.iana_name())
+            .field("dark", &self.dark)
             .finish()
     }
 }
@@ -67,6 +70,7 @@ impl Kobo {
             framebuffer,
             dir,
             zone,
+            dark: false,
         }
     }
 
@@ -94,7 +98,14 @@ impl Device for Kobo {
         let source = screen.pixels();
         let target = fb.pixels();
         for (row, line) in source.chunks_exact(width).enumerate() {
-            target[row * stride..row * stride + width].copy_from_slice(line);
+            let target = &mut target[row * stride..row * stride + width];
+            if self.dark {
+                for (to, from) in target.iter_mut().zip(line) {
+                    *to = !*from;
+                }
+            } else {
+                target.copy_from_slice(line);
+            }
         }
         let waveform = match refresh {
             Refresh::Partial => Waveform::Gl16,
@@ -152,6 +163,10 @@ impl Device for Kobo {
         }
         log!("woke");
         slept.is_ok()
+    }
+
+    fn set_dark(&mut self, on: bool) {
+        self.dark = on;
     }
 
     fn wake_at(&mut self, at: Option<u64>) -> bool {

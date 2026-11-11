@@ -134,6 +134,8 @@ struct Fake {
     alarms: bool,
     alarm: Option<u64>,
     sleep_for: u64,
+    /// Showing everything inverted, for dark mode.
+    dark: bool,
     files: HashMap<String, Vec<u8>>,
     clock: u64,
     /// Whether switching on starts the reader, if that can change.
@@ -174,6 +176,9 @@ impl Device for Fake {
             };
         }
         self.can_suspend
+    }
+    fn set_dark(&mut self, on: bool) {
+        self.dark = on;
     }
     fn wake_at(&mut self, at: Option<u64>) -> bool {
         if self.alarms {
@@ -767,6 +772,7 @@ const DARKNESS: u8 = 4;
 const LIGHT: u8 = 6;
 const TURN_GUARD: u8 = 8;
 const JUSTIFIED: (f32, f32) = (296.0, 1253.0);
+const DARK: (f32, f32) = (856.0, 1253.0);
 /// Sync, Kobo and Done along the bottom.
 const SETTINGS_SYNC: (f32, f32) = (216.0, 1376.0);
 const SETTINGS_KOBO: (f32, f32) = (536.0, 1376.0);
@@ -1116,6 +1122,25 @@ fn settings_lay_the_book_out_again_when_it_is_next_shown() {
 
     let again = Run::at_home(run.device);
     assert_eq!(again.session.preferences().line_height, 1.5);
+}
+
+#[test]
+fn dark_mode_is_kept_and_left_off_for_switching_off() {
+    let mut run = Run::new();
+    run.settings();
+    assert!(!run.device.dark);
+    run.tap(DARK.0, DARK.1);
+    assert!(run.session.preferences().dark);
+    assert!(run.device.dark);
+    assert_eq!(run.device.shown.last(), Some(&Refresh::Full));
+    // Kept for next time.
+    run.device.dark = false;
+    let mut run = Run::at_home(run.device);
+    assert!(run.device.dark);
+    // What's left on the panel when it's off is as printed.
+    run.send(Event::PowerHeld);
+    run.tap(POWER_OFF.0, POWER_OFF.1);
+    assert!(!run.device.dark);
 }
 
 #[test]

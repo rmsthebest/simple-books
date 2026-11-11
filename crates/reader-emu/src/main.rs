@@ -415,6 +415,8 @@ struct Panel {
     zone: jiff::tz::TimeZone,
     /// From `--dictionary`.
     dictionary: Option<PathBuf>,
+    /// Dark mode, as the Kobo does it: each screen inverted.
+    dark: bool,
 }
 
 impl Panel {
@@ -434,6 +436,7 @@ impl Panel {
             dir,
             zone: jiff::tz::TimeZone::try_system().unwrap_or(jiff::tz::TimeZone::UTC),
             dictionary: None,
+            dark: false,
         }
     }
 
@@ -459,7 +462,14 @@ impl Device for Panel {
     fn show(&mut self, screen: &Canvas, refresh: Refresh) {
         std::mem::swap(&mut self.before, &mut self.next);
         self.next.clone_from(screen);
+        if self.dark {
+            self.next.invert();
+        }
         self.refresh = Some((Instant::now(), refresh));
+    }
+
+    fn set_dark(&mut self, on: bool) {
+        self.dark = on;
     }
 
     fn battery(&mut self) -> Option<Battery> {

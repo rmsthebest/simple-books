@@ -208,6 +208,10 @@ pub trait Device {
     /// Sleeps, returning once awake again. False if it couldn't sleep, such
     /// as while charging.
     fn suspend(&mut self) -> bool;
+    /// Shows everything after this inverted, or not, for dark mode.
+    fn set_dark(&mut self, on: bool) {
+        let _ = on;
+    }
     /// Asks to be woken from [`Device::suspend`] at `at`, in seconds since
     /// 1970, or not at all with `None`. False where it can't.
     fn wake_at(&mut self, at: Option<u64>) -> bool {
@@ -299,6 +303,10 @@ pub enum Flow {
 /// What the reader has chosen, kept across books and restarts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each is a setting turned on or off on its own"
+)]
 pub struct Preferences {
     /// The text's family, from [`reader_core::font_families`]; `None` for
     /// Literata.
@@ -319,6 +327,9 @@ pub struct Preferences {
     pub margin: u32,
     /// Turns sooner than this after the last one are dropped; 0 for none.
     pub turn_guard_ms: u32,
+    /// Light text on black, everywhere but the sleep and switched-off
+    /// screens.
+    pub dark: bool,
 }
 
 impl Default for Preferences {
@@ -337,6 +348,7 @@ impl Default for Preferences {
             line_height: settings.line_height,
             margin: settings.margin_side,
             turn_guard_ms: 300,
+            dark: false,
         }
     }
 }
@@ -494,6 +506,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             }
             None => device.light(),
         };
+        device.set_dark(preferences.dark);
         let mut library = Library::load(device);
         if library.refresh(books.as_ref(), device) {
             library.save(device);
@@ -1358,7 +1371,13 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Some(settings::Action::Toggle(toggle)) => {
                 toggle.flip(&mut self.preferences);
                 save_json(device, PREFERENCES, &self.preferences);
-                self.show_settings(device, Refresh::Partial, now);
+                let refresh = if toggle == settings::Toggle::Dark {
+                    device.set_dark(self.preferences.dark);
+                    Refresh::Full
+                } else {
+                    Refresh::Partial
+                };
+                self.show_settings(device, refresh, now);
             }
             Some(settings::Action::Sync) => self.show_sync(device, Refresh::Full, now),
             Some(settings::Action::Kobo) => {
@@ -1967,6 +1986,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         };
         self.save(device);
         power_page::draw_final(&mut self.screen, &mut self.ui, said, below);
+        // Left on the panel while it's off: as printed, not dark.
+        device.set_dark(false);
         device.show(&self.screen, Refresh::Full);
         Ok(flow)
     }
@@ -1995,6 +2016,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             "Battery empty",
             "Charge the Kobo, then hold the power button to switch it on.",
         );
+        device.set_dark(false);
         device.show(&self.screen, Refresh::Full);
         Flow::PowerOff
     }
@@ -2004,6 +2026,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         let back = self.here();
         if let Some(cover) = self.sleep_cover() {
             draw_cover(&mut self.screen, &cover);
+            // A cover as printed, not dark.
+            device.set_dark(false);
         } else {
             self.asleep_notice(&back)?;
         }
@@ -2092,6 +2116,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         };
         self.woke = Some(now);
         self.last_touch = now;
+        device.set_dark(self.preferences.dark);
         // Asleep, the clock the checks go by stood still.
         self.battery_checked = None;
         let clock = device.clock();
