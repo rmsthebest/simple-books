@@ -20,6 +20,9 @@
 //!   front light, warmth, text size, darkness and contrast, a way back from
 //!   a link, and [`settings`], which return to the book. The way out to
 //!   Nickel is on the power screen ([`power_page`]), held power button.
+//! - **Looking up:** a finger resting on a word ([`Event::Hold`]) shows
+//!   its Swedish translations ([`lookup`]), from the dictionary file
+//!   [`DICTIONARY`], read the first time it's needed. A tap closes it.
 //! - **Sleep:** the power button, or [`AUTO_SLEEP`] without a touch, saves
 //!   the place and suspends, except while charging, which can hang the
 //!   Clara BW's kernel.
@@ -38,6 +41,7 @@ mod folder;
 mod home;
 mod kobo_page;
 mod library;
+mod lookup;
 mod menu;
 mod place;
 mod power_page;
@@ -57,6 +61,7 @@ use std::{
 };
 
 use book_format::{BookReader, FormatError, Position};
+use dictionary::Dictionary;
 pub use reader_core::Turn;
 use reader_core::{Canvas, Picture, Reader, ReaderError, Settings, TurnGuard, Typesetter};
 use serde::{Deserialize, Serialize};
@@ -88,6 +93,8 @@ pub const SLEEP_RETRY: Duration = Duration::from_secs(5);
 const BACKGROUND_CHECK: Duration = Duration::from_secs(1);
 /// The place is saved every this many turns, besides on sleep and exit.
 const SAVE_EVERY: u32 = 10;
+/// How long a finger rests before it's a [`Event::Hold`].
+pub const LONG_PRESS: Duration = Duration::from_millis(500);
 /// The longest the places from before sleeping may take to send before
 /// it suspends anyway; Wi-Fi alone can take most of a minute.
 pub const SLEEP_SEND_LONGEST: Duration = Duration::from_secs(60);
@@ -106,8 +113,16 @@ pub enum AppError {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Event {
-    /// A touch, at the place it was let go, in screen pixels.
+    /// A touch, at the place the finger came down, in screen pixels; sent
+    /// when it lifts.
     Tap {
+        x: f32,
+        y: f32,
+    },
+    /// A finger resting [`LONG_PRESS`] where it came down, sent while it's
+    /// still there: looks up the word under it while reading. Elsewhere
+    /// it's a [`Event::Tap`]. The lift that follows sends nothing.
+    Hold {
         x: f32,
         y: f32,
     },
@@ -172,6 +187,11 @@ pub trait Device {
     /// as while charging.
     fn suspend(&mut self) -> bool;
     fn load(&mut self, name: &str) -> Option<Vec<u8>>;
+    /// The English–Swedish dictionary file, if there is one: [`DICTIONARY`]
+    /// beside the saved files, unless the platform keeps it elsewhere.
+    fn dictionary(&mut self) -> Option<Vec<u8>> {
+        self.load(DICTIONARY)
+    }
     fn save(&mut self, name: &str, bytes: &[u8]);
     /// The time, in seconds since 1970, for when books were last opened.
     fn clock(&mut self) -> u64;
@@ -327,6 +347,11 @@ enum Mode {
         nickel_at: Instant,
     },
     Reading,
+    /// A word looked up, over the page.
+    Lookup {
+        /// The word as printed.
+        word: String,
+    },
     Menu(menu::Layout),
     /// On the sleep screen, waiting to suspend, or awake again after a
     /// failed try.
@@ -387,6 +412,8 @@ pub struct Session<R> {
     status_due: Option<Instant>,
     /// Whether the status shown says Wi-Fi is up.
     status_wifi: bool,
+    /// Read the first time a word is looked up.
+    dictionary: Option<Dictionary>,
 }
 
 impl<R> std::fmt::Debug for Session<R> {
@@ -441,6 +468,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             settings_from: Back::Home,
             status_due: None,
             status_wifi: false,
+            dictionary: None,
         };
         session.go_home(device, Refresh::Full, now);
         Ok(session)
@@ -458,6 +486,14 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     /// Whether the home screen is up.
     pub fn at_home(&self) -> bool {
         matches!(self.mode, Mode::Home(_))
+    }
+
+    /// The word looked up, while its translations are up.
+    pub fn looking_up(&self) -> Option<&str> {
+        match &self.mode {
+            Mode::Lookup { word } => Some(word),
+            _ => None,
+        }
     }
 
     /// Whether the book's menu is up.
@@ -817,6 +853,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             | Mode::Sync(_)
             | Mode::Usb { .. }
             | Mode::Reading
+            | Mode::Lookup { .. }
             | Mode::Menu(_) => self.last_touch + AUTO_SLEEP,
         };
         if self.book.as_ref().is_some_and(book::OpenBook::paginating) {
@@ -842,6 +879,11 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         if !matches!(event, Event::Tick) {
             self.last_touch = now;
         }
+        // Only a page has words to look up.
+        let event = match event {
+            Event::Hold { x, y } if !matches!(self.mode, Mode::Reading) => Event::Tap { x, y },
+            event => event,
+        };
         let at_home = matches!(self.mode, Mode::Home(_));
         let in_library = matches!(self.mode, Mode::Library(_));
         let in_search = matches!(self.mode, Mode::Search(_));
@@ -854,6 +896,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             _ => None,
         };
         let in_menu = matches!(self.mode, Mode::Menu(_));
+        let in_lookup = matches!(self.mode, Mode::Lookup { .. });
         let asleep = matches!(self.mode, Mode::Asleep { .. });
         match event {
             Event::Exit => {
@@ -891,6 +934,18 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Event::Tap { x, y } if in_kobo => return Ok(self.kobo_tap(x, y, now, device)),
             Event::Tap { x, y } if in_sync => self.sync_tap(x, y, now, device),
             Event::Tap { x, y } if in_usb => return self.usb_tap(x, y, now, device),
+            Event::Tap { .. } | Event::Hold { .. } | Event::Back if in_lookup => {
+                self.mode = Mode::Reading;
+                self.show_page(device, Refresh::Full, now)?;
+            }
+            Event::Turn(turn) if in_lookup => {
+                self.mode = Mode::Reading;
+                let turns = self.turns;
+                self.turn(turn, now, device)?;
+                if self.turns == turns {
+                    self.show_page(device, Refresh::Full, now)?;
+                }
+            }
             _ if at_home
                 || in_library
                 || in_search
@@ -900,6 +955,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 || in_usb
                 || in_menu => {}
             Event::Tap { x, y } => self.reading_tap(x, y, now, device)?,
+            Event::Hold { x, y } => self.look_up(x, y, now, device)?,
             Event::Turn(turn) => self.turn(turn, now, device)?,
             Event::Back => {
                 let went_back = match self.book.as_mut() {
@@ -1312,7 +1368,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             | Mode::Usb { .. }
             | Mode::Power { .. } => Some(((0.0, ui::HEADER), ui::HEADER * 0.62)),
             Mode::Menu(layout) => Some(layout.status_band()),
-            Mode::Reading | Mode::Asleep { .. } => None,
+            Mode::Reading | Mode::Lookup { .. } | Mode::Asleep { .. } => None,
         }
     }
 
@@ -1387,6 +1443,52 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         } else {
             self.turn(Turn::Next, now, device)?;
         }
+        Ok(())
+    }
+
+    /// Outlines the word nearest (`x`, `y`) and shows what it means.
+    fn look_up(
+        &mut self,
+        x: f32,
+        y: f32,
+        now: Instant,
+        device: &mut dyn Device,
+    ) -> Result<(), AppError> {
+        let Some(word) = self
+            .book
+            .as_ref()
+            .and_then(|book| book.reader.word_at(x, y))
+        else {
+            return Ok(());
+        };
+        let normal = dictionary::normalize(&word.text);
+        if normal.is_empty() {
+            return Ok(());
+        }
+        // Not kept when it's missing, so it can be put there later.
+        let mut why = String::new();
+        if self.dictionary.is_none() {
+            match load_dictionary(device) {
+                Ok(dictionary) => self.dictionary = Some(dictionary),
+                Err(error) => why = error,
+            }
+        }
+        let found = match &self.dictionary {
+            Some(dictionary) => {
+                let entries = dictionary.lookup(&word.text);
+                if entries.is_empty() {
+                    lookup::Found::Nothing(normal)
+                } else {
+                    lookup::Found::Entries(entries)
+                }
+            }
+            None => lookup::Found::NoDictionary(why),
+        };
+        self.compose_page()?;
+        lookup::draw(&mut self.screen, &mut self.ui, &word, &found);
+        device.show(&self.screen, Refresh::Partial);
+        self.guard.refreshing(now + Refresh::Partial.duration());
+        self.mode = Mode::Lookup { word: word.text };
         Ok(())
     }
 
@@ -1490,6 +1592,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             | Mode::Sync(_)
             | Mode::Usb { .. }
             | Mode::Reading
+            | Mode::Lookup { .. }
             | Mode::Menu(_) => {
                 let idle = now.duration_since(self.last_touch) >= AUTO_SLEEP;
                 if idle && !device.battery().is_some_and(|b| b.charging) {
@@ -1511,7 +1614,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             Mode::Usb { back, .. } | Mode::Power { back, .. } | Mode::Asleep { back, .. } => {
                 back.clone()
             }
-            Mode::Reading | Mode::Menu(_) => Back::Reading,
+            Mode::Reading | Mode::Lookup { .. } | Mode::Menu(_) => Back::Reading,
         }
     }
 
@@ -1884,6 +1987,24 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
 
 /// "84%", "84%, charging", or nothing if the device doesn't say.
 /// The page number's text size: small, in the bottom margin.
+/// The English–Swedish dictionary's file name, made from Folkets lexikon
+/// by the `dictionary` crate.
+pub const DICTIONARY: &str = "dict-en-sv";
+
+/// Reads the dictionary file, or says why it can't.
+fn load_dictionary(device: &mut dyn Device) -> Result<Dictionary, String> {
+    let Some(bytes) = device.dictionary() else {
+        return Err(format!(
+            "To look words up, the reader's folder needs the dictionary file, {DICTIONARY}."
+        ));
+    };
+    let damaged = |error: &dyn std::fmt::Display| {
+        format!("The dictionary file, {DICTIONARY}, can't be read: {error}.")
+    };
+    let text = String::from_utf8(bytes).map_err(|error| damaged(&error))?;
+    Dictionary::parse(text).map_err(|error| damaged(&error))
+}
+
 const PAGE_NUMBER_SIZE: f32 = 28.0;
 
 /// "12 of 340", centred in the bottom margin, which no line of the book

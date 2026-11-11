@@ -6,7 +6,8 @@
 //!
 //! Each drawn page keeps where its links are. [`Reader::link_at`] finds the
 //! one a tap meant, and [`Reader::follow`] remembers where the reader was, so
-//! [`Reader::back`] can return from a footnote.
+//! [`Reader::back`] can return from a footnote. It keeps where its words are
+//! too, for [`Reader::word_at`].
 
 use std::io::{Read, Seek};
 
@@ -15,7 +16,7 @@ use book_format::{Block, BookReader, Chapter, FormatError, ImageInfo, Manifest, 
 use crate::{
     Canvas, PageMap, PageRef, PageStart, Settings, Typesetter,
     paginate::{draw_page, paginate, paginate_from, paginate_keeping, paginate_unless},
-    typeset::{ChapterRef, Page},
+    typeset::{ChapterRef, Page, WordArea},
 };
 
 /// Drawn pages kept: the current one and one each side.
@@ -359,6 +360,20 @@ impl<R: Read + Seek> Reader<R> {
         // one pushed out.
         self.cached(current);
         Ok(())
+    }
+
+    /// The word nearest (`x`, `y`) on the current page, if one is within
+    /// reach. The page must have been drawn with [`Self::page`].
+    pub fn word_at(&self, x: f32, y: f32) -> Option<WordArea> {
+        let current = self.current?;
+        let (_, page) = self.pages.iter().find(|(p, _)| *p == current)?;
+        let reach = REACH_MM / 25.4 * self.typesetter.settings().dpi;
+        page.words
+            .iter()
+            .map(|word| (word.distance(x, y), word))
+            .filter(|(distance, _)| *distance <= reach)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, word)| word.clone())
     }
 
     /// Where the link nearest (`x`, `y`) on the current page goes, if one is

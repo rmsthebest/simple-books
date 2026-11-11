@@ -60,7 +60,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use reader_app::{Event, Flow, Folder, Session, SyncSetup};
+use reader_app::{Event, Flow, Folder, LONG_PRESS, Session, SyncSetup};
 
 use crate::{
     device::Kobo,
@@ -283,6 +283,11 @@ struct Inputs {
     /// The button has been down for [`HOLD`] and the power screen asked
     /// for, so letting go does nothing.
     held: bool,
+    /// When the finger on the panel came down, if one is.
+    touch_down: Option<Instant>,
+    /// It rested there for [`LONG_PRESS`], and a hold was sent, so lifting
+    /// it is no tap.
+    touch_held: bool,
     /// Plugged into a computer, as last seen.
     computer: bool,
 }
@@ -307,6 +312,8 @@ impl Inputs {
             width,
             power_down: None,
             held: false,
+            touch_down: None,
+            touch_held: false,
             computer: plugged_into_computer(),
         })
     }
@@ -323,21 +330,45 @@ impl Inputs {
             fds.len() - 1
         });
         // Held down, the power screen comes up without waiting to be let go.
-        let timeout = match self.power_down {
+        let mut timeout = match self.power_down {
             Some(down) if !self.held => {
                 timeout.min((down + HOLD).saturating_duration_since(Instant::now()))
             }
             _ => timeout,
         };
+        // A finger resting is a hold without waiting for it to lift.
+        if let Some(down) = self.touch_down
+            && !self.touch_held
+        {
+            timeout = timeout.min((down + LONG_PRESS).saturating_duration_since(Instant::now()));
+        }
         let ready = sys::poll(&fds, timeout)?;
         let now = Instant::now();
         let mut events = Vec::new();
         if ready[0] {
             for raw in read_events(&self.touch) {
                 if let Some((x, y)) = self.taps.feed(raw, self.width) {
-                    events.push(Event::Tap { x, y });
+                    self.touch_down = None;
+                    if !std::mem::take(&mut self.touch_held) {
+                        events.push(Event::Tap { x, y });
+                    }
+                } else if self.touch_down.is_none() && self.taps.down_at().is_some() {
+                    self.touch_down = Some(now);
                 }
             }
+            // A touch the panel dropped without a lift: nothing to wait
+            // for, or the timeout above would stay at nothing.
+            if self.taps.down_at().is_none() {
+                self.touch_down = None;
+                self.touch_held = false;
+            }
+        }
+        if let (Some(down), Some((x, y))) = (self.touch_down, self.taps.down_at())
+            && !self.touch_held
+            && now.duration_since(down) >= LONG_PRESS
+        {
+            self.touch_held = true;
+            events.push(Event::Hold { x, y });
         }
         if ready[1] {
             for raw in read_events(&self.power) {

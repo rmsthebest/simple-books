@@ -374,8 +374,7 @@ pub(crate) fn draw_page(
     page: usize,
     image: &mut dyn FnMut(u32) -> Option<image::GrayImage>,
 ) {
-    drawn.canvas.clear();
-    drawn.links.clear();
+    drawn.clear();
     let Some(start) = pages.get(page) else {
         return;
     };

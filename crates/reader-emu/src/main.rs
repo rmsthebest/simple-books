@@ -1,7 +1,7 @@
 //! The reader in a desktop window, shaped and timed like the Clara BW.
 //!
 //! ```sh
-//! cargo run --release -p reader-emu -- [books-folder | book.epub | book.book]... [--full] [--server URL]
+//! cargo run --release -p reader-emu -- [books-folder | book.epub | book.book]... [--full] [--server URL] [--dictionary FILE]
 //! ```
 //!
 //! Starts on the home screen, with the books in the given folder. EPUBs
@@ -26,11 +26,18 @@
 //! secure origin. Then run the emulator with `--server http://localhost:3000`,
 //! tap Pair and type the code at `localhost:3000/device`.
 //!
+//! `--dictionary FILE` looks words up in that dictionary file, as made by
+//! `scripts/build-kobo-files.sh` in
+//! `target/kobo-files/.adds/simple-books/dict-en-sv`. Without it, the file
+//! is looked for in the cache directory.
+//!
 //! It runs the same [`Session`] as the Kobo, with the mouse as the finger:
 //!
 //! - Click the left third of the page to go back a page, the right third to
 //!   go forward, and the middle third for the menu. Click a link to follow
-//!   it. On the home screen, click a cover to open its book.
+//!   it. Hold the button down on a word to look it up in the dictionary,
+//!   and click anywhere to close that. On the home screen, click a cover to
+//!   open its book.
 //! - ← and Page Up go back, → Page Down and Space forward, and Backspace
 //!   returns from a link. `P` is the power button, and `O` holds it down.
 //! - `+` and `-` change the text size, `H` toggles hyphenation, `J`
@@ -61,8 +68,8 @@ use reader_app::{
 };
 use reader_core::{Canvas, Settings};
 
-const USAGE: &str =
-    "usage: reader-emu [books-folder | book.epub | book.book]... [--full] [--server URL]";
+const USAGE: &str = "usage: reader-emu [books-folder | book.epub | book.book]... [--full] \
+                     [--server URL] [--dictionary FILE]";
 
 /// What the command line asks for.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -70,6 +77,7 @@ struct Args {
     paths: Vec<PathBuf>,
     full: bool,
     server: Option<String>,
+    dictionary: Option<PathBuf>,
 }
 
 impl Args {
@@ -86,6 +94,15 @@ impl Args {
                 }
                 _ if arg.starts_with("--server=") => {
                     parsed.server = Some(server_url(&arg["--server=".len()..])?);
+                }
+                "--dictionary" => {
+                    let file = args
+                        .next()
+                        .ok_or("--dictionary needs the dictionary file")?;
+                    parsed.dictionary = Some(PathBuf::from(file));
+                }
+                _ if arg.starts_with("--dictionary=") => {
+                    parsed.dictionary = Some(PathBuf::from(&arg["--dictionary=".len()..]));
                 }
                 _ if arg.starts_with("--") => return Err(format!("unknown option {arg}\n{USAGE}")),
                 _ => parsed.paths.push(PathBuf::from(arg)),
@@ -110,6 +127,38 @@ fn server_url(url: &str) -> Result<String, String> {
     Ok(url.to_owned())
 }
 
+/// The mouse button as the finger, as on the Kobo: a tap where it went
+/// down, once let go, or a hold once it's rested there long enough.
+#[derive(Debug, Default)]
+struct Mouse {
+    /// Where and when it went down, and whether that's been a hold.
+    pressed: Option<((f32, f32), Instant, bool)>,
+}
+
+impl Mouse {
+    fn feed(&mut self, down: bool, at: Option<(f32, f32)>, now: Instant) -> Option<Event> {
+        match (&mut self.pressed, down) {
+            (None, true) => {
+                self.pressed = at.map(|at| (at, now, false));
+                None
+            }
+            (Some(((x, y), since, held)), true) => {
+                if !*held && now.duration_since(*since) >= reader_app::LONG_PRESS {
+                    *held = true;
+                    return Some(Event::Hold { x: *x, y: *y });
+                }
+                None
+            }
+            (Some(((x, y), _, held)), false) => {
+                let tap = (!*held).then_some(Event::Tap { x: *x, y: *y });
+                self.pressed = None;
+                tap
+            }
+            (None, false) => None,
+        }
+    }
+}
+
 fn main() {
     let args = Args::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
         eprintln!("{error}");
@@ -119,6 +168,7 @@ fn main() {
 
     let settings = Settings::default();
     let mut panel = Panel::new(settings.width, settings.height);
+    panel.dictionary.clone_from(&args.dictionary);
     let Some(own) = panel.dir.as_ref().map(|dir| dir.join("books")) else {
         eprintln!("no cache directory: set XDG_CACHE_HOME or HOME");
         std::process::exit(1);
@@ -160,7 +210,7 @@ fn main() {
     window.set_target_fps(60);
 
     let mut screen = vec![0u32; width * height];
-    let mut was_down = false;
+    let mut mouse = Mouse::default();
     let mut tick_at = session.deadline(Instant::now());
     while window.is_open() && !window.is_key_down(Key::Escape) && !window.is_key_down(Key::Q) {
         let now = Instant::now();
@@ -176,16 +226,10 @@ fn main() {
             }
         }
         let down = window.get_mouse_down(MouseButton::Left);
-        if down
-            && !was_down
-            && let Some((x, y)) = window.get_mouse_pos(MouseMode::Discard)
-        {
-            events.push(Event::Tap {
-                x: x * divisor as f32,
-                y: y * divisor as f32,
-            });
-        }
-        was_down = down;
+        let at = window
+            .get_mouse_pos(MouseMode::Discard)
+            .map(|(x, y)| (x * divisor as f32, y * divisor as f32));
+        events.extend(mouse.feed(down, at, now));
         if now >= tick_at {
             events.push(Event::Tick);
         }
@@ -352,6 +396,8 @@ struct Panel {
     dir: Option<PathBuf>,
     /// This computer's time zone, for the time in the status.
     zone: jiff::tz::TimeZone,
+    /// From `--dictionary`.
+    dictionary: Option<PathBuf>,
 }
 
 impl Panel {
@@ -370,6 +416,7 @@ impl Panel {
             },
             dir,
             zone: jiff::tz::TimeZone::try_system().unwrap_or(jiff::tz::TimeZone::UTC),
+            dictionary: None,
         }
     }
 
@@ -418,6 +465,15 @@ impl Device for Panel {
 
     fn load(&mut self, name: &str) -> Option<Vec<u8>> {
         std::fs::read(self.dir.as_ref()?.join(name)).ok()
+    }
+
+    fn dictionary(&mut self) -> Option<Vec<u8>> {
+        match &self.dictionary {
+            Some(file) => std::fs::read(file)
+                .inspect_err(|error| eprintln!("{}: {error}", file.display()))
+                .ok(),
+            None => self.load(reader_app::DICTIONARY),
+        }
     }
 
     fn save(&mut self, name: &str, bytes: &[u8]) {
@@ -497,6 +553,10 @@ mod tests {
         assert!(args.full);
         assert_eq!(args.server.as_deref(), Some("http://localhost:3000"));
         assert_eq!(
+            parse(&["--dictionary", "dict-en-sv"]).unwrap().dictionary,
+            Some(PathBuf::from("dict-en-sv"))
+        );
+        assert_eq!(
             parse(&["--server=https://books.example.com"])
                 .unwrap()
                 .server
@@ -508,6 +568,7 @@ mod tests {
             &["--server", "localhost:3000"],
             &["--server", "https://books.example.com/kobo/x"],
             &["--fast"],
+            &["--dictionary"],
         ] {
             assert!(parse(bad).is_err(), "{bad:?}");
         }

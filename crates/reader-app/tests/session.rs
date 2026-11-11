@@ -1334,3 +1334,103 @@ fn uninstalling_takes_a_second_tap_and_saves_the_place() {
     assert_eq!(run.tap(KOBO_UNINSTALL.0, KOBO_UNINSTALL.1), Flow::Uninstall);
     assert!(run.device.files.keys().any(|k| k.starts_with("position-")));
 }
+
+/// A dictionary file with "road" in it.
+fn dictionary() -> Vec<u8> {
+    let mut builder = dictionary::Builder::default();
+    builder.add(
+        dictionary::Entry {
+            word: "road".to_owned(),
+            class: "noun".to_owned(),
+            senses: vec![dictionary::Sense {
+                translations: "väg".to_owned(),
+                ..dictionary::Sense::default()
+            }],
+        },
+        &[],
+    );
+    builder.finish("a test dictionary").into_bytes()
+}
+
+impl Run {
+    /// Where on the page a word is, the first found going down the middle
+    /// of the left third, with its text.
+    fn word(&self, wanted: &str) -> (f32, f32) {
+        let reader = self.reader();
+        for y in (100..1400u16).step_by(10) {
+            for x in (60..1000u16).step_by(20) {
+                let (x, y) = (f32::from(x), f32::from(y));
+                if reader.word_at(x, y).is_some_and(|w| w.text == wanted) {
+                    return (x, y);
+                }
+            }
+        }
+        panic!("no {wanted:?} on the page");
+    }
+}
+
+#[test]
+fn holding_a_word_looks_it_up_and_a_tap_puts_the_page_back() {
+    let mut run = Run::new();
+    run.device
+        .files
+        .insert(reader_app::DICTIONARY.to_owned(), dictionary());
+    // Settle the page's neighbours, so the page's own screen is known.
+    run.tick_after(Duration::from_secs(1));
+    let page = run.page();
+    let (x, y) = run.word("road");
+    let plain = run.device.last;
+    run.send(Event::Hold { x, y });
+    assert_eq!(run.session.looking_up(), Some("road"));
+    assert_eq!(run.device.shown.last(), Some(&Refresh::Partial));
+    assert_ne!(run.device.last, plain, "the translation is over the page");
+    // A tap in the right third closes it, without turning.
+    run.tap(FORWARD.0, FORWARD.1);
+    assert_eq!(run.session.looking_up(), None);
+    assert_eq!(run.page(), page);
+    assert_eq!(run.device.last, plain);
+    // A word that isn't in it says so, and the turn button closes that and
+    // turns.
+    let (x, y) = run.word("south");
+    run.send(Event::Hold { x, y });
+    assert_eq!(run.session.looking_up(), Some("south"));
+    run.send(Event::Turn(Turn::Next));
+    assert_eq!(run.session.looking_up(), None);
+    assert!(run.page() > page);
+}
+
+#[test]
+fn without_the_dictionary_holding_a_word_says_so() {
+    let mut run = Run::new();
+    let (x, y) = run.word("road");
+    let plain = run.device.last;
+    run.send(Event::Hold { x, y });
+    assert_eq!(run.session.looking_up(), Some("road"));
+    assert_ne!(run.device.last, plain);
+    // Put there later, it's found then.
+    run.tap(FORWARD.0, FORWARD.1);
+    run.device
+        .files
+        .insert(reader_app::DICTIONARY.to_owned(), dictionary());
+    run.send(Event::Hold { x, y });
+    assert_eq!(run.session.looking_up(), Some("road"));
+}
+
+#[test]
+fn holding_anywhere_but_a_page_is_a_tap() {
+    let mut run = Run::new();
+    // In the middle third, away from words: the bottom margin.
+    run.send(Event::Hold {
+        x: 536.0,
+        y: 1430.0,
+    });
+    assert_eq!(run.session.looking_up(), None);
+    assert!(!run.session.in_menu(), "a hold on the page isn't a tap");
+    run.tap(MENU.0, MENU.1);
+    assert!(run.session.in_menu());
+    run.send(Event::Hold {
+        x: MENU_SETTINGS.0,
+        y: MENU_SETTINGS.1,
+    });
+    assert!(run.session.in_settings(), "but it is in the menu");
+}

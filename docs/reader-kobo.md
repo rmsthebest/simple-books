@@ -22,6 +22,7 @@ its own SSH server.
 | `.adds/simple-books/boot.sh` | `kobo/boot.sh` | Runs the reader at boot, before Nickel, once booting into it is on |
 | `.adds/simple-books/boot-install.sh` | `kobo/boot-install.sh` | Turns booting into the reader on and off |
 | `.adds/simple-books/power.sh` | `kobo/power.sh` | Powers off or restarts, when the reader's power screen asks |
+| `.adds/simple-books/dict-en-sv` | `crates/dictionary/data/folkets_en_sv_public.xml.gz`, converted by the build | The English–Swedish dictionary, from [Folkets lexikon](https://folkets-lexikon.csc.kth.se/folkets/) (KTH), CC BY-SA 2.5 |
 | `.adds/simple-books/version` | `git describe`, by the build | Which build is installed |
 | `/usr/local/Kobo/imageformats/libsimplebooks.so` | `crates/kobo-plugin`, through `.kobo/Kobo.tgz` | The Nickel plugin: starts the helper beside Nickel (see [How it's started](#how-its-started)) |
 | `.adds/simple-books/books/*.book` | made by the server, or by hand (below) | Books, on the home screen |
@@ -114,6 +115,14 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
 - **Turn pages** by tapping: the left third of the page goes back, the right third goes
   forward. Tap a link to follow it. The page number, such as "12 of 340", is under the
   text once the whole book has been counted, a few seconds after it's first opened.
+- **Look a word up** by resting a finger on it for half a second. The word is outlined,
+  and a panel beside it shows its Swedish translations from Folkets lexikon's
+  English–Swedish dictionary: each word class ("verb"), its senses, and an example.
+  Inflected words find their base form, so "running" shows "run" too, and a word broken
+  at a hyphen is looked up whole. Any tap closes the panel without turning the page. The
+  dictionary is [Folkets lexikon](https://folkets-lexikon.csc.kth.se/folkets/), from KTH
+  Royal Institute of Technology, under [CC BY-SA
+  2.5](https://creativecommons.org/licenses/by-sa/2.5/); the panel credits it too.
 - **The menu** opens with a tap in the middle third of the page. It has the front light and
   warmth, text size, darkness and contrast, and along the bottom **Close**, **Return**
   after following a link, **Home** and **Settings**. **Done** in Settings comes back to

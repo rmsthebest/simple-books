@@ -3584,6 +3584,7 @@ name = "reader-app"
 version = "0.1.0"
 dependencies = [
  "book-format",
+ "dictionary",
  "image",
  "jiff",
  "reader-core",

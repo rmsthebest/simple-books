@@ -56,6 +56,11 @@ pub(crate) struct Touch {
 }
 
 impl Touch {
+    /// Where the finger on the panel came down, while it's there.
+    pub(crate) fn down_at(&self) -> Option<(f32, f32)> {
+        self.down_at
+    }
+
     /// Takes one event. Returns a tap, at the place it came down, when the
     /// finger lifts. `width` is the upright screen's width in pixels.
     pub(crate) fn feed(&mut self, event: RawEvent, width: u32) -> Option<(f32, f32)> {

@@ -50,11 +50,34 @@ impl LinkArea {
     }
 }
 
-/// A drawn page: its pixels, and where its links are.
+/// Where a word was drawn on a page, for finding what a long press rests
+/// on. Spans the height of its line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WordArea {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    /// The whole word as the book has it, with the punctuation next to it
+    /// and any soft hyphens, even where the line breaks it.
+    pub text: String,
+}
+
+impl WordArea {
+    /// How far (`x`, `y`) is from the area: 0 inside it.
+    pub(crate) fn distance(&self, x: f32, y: f32) -> f32 {
+        let dx = (self.left - x).max(x - self.right).max(0.0);
+        let dy = (self.top - y).max(y - self.bottom).max(0.0);
+        dx.hypot(dy)
+    }
+}
+
+/// A drawn page: its pixels, and where its links and words are.
 #[derive(Debug, Clone)]
 pub(crate) struct Page {
     pub canvas: Canvas,
     pub links: Vec<LinkArea>,
+    pub words: Vec<WordArea>,
 }
 
 impl Page {
@@ -62,8 +85,22 @@ impl Page {
         Self {
             canvas: Canvas::new(width, height),
             links: Vec::new(),
+            words: Vec::new(),
         }
     }
+
+    /// Clears it for drawing again.
+    pub(crate) fn clear(&mut self) {
+        self.canvas.clear();
+        self.links.clear();
+        self.words.clear();
+    }
+}
+
+/// Whether `c` comes between words rather than in one: a space, or a dash
+/// or slash that joins two words without spaces.
+fn between_words(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '\u{2013}' | '\u{2014}' | '\u{2015}' | '/' | '\u{2026}')
 }
 
 /// A link's run of ink on one line, collected while the line is drawn.
@@ -403,6 +440,75 @@ impl Typesetter {
         if let Some(done) = underline.take() {
             done.finish(page);
         }
+        self.record_words(page, line_index, x0, y0);
+    }
+
+    /// Records where each word of a line is, with the layout's origin at
+    /// (`x0`, `y0`). A word's text runs on past the line's ends, so both
+    /// halves of a word broken at a hyphen have all of it.
+    fn record_words(&self, page: &mut Page, line_index: usize, x0: f32, y0: f32) {
+        let Some(line) = self.layout.get(line_index) else {
+            return;
+        };
+        let metrics = line.metrics();
+        let (top, bottom) = (y0 + metrics.block_min_coord, y0 + metrics.block_max_coord);
+        let text = self.text.as_str();
+        // The word so far: its left and right, and where it is in the text.
+        let mut word: Option<(f32, f32, std::ops::Range<usize>)> = None;
+        let mut finish = |word: &mut Option<(f32, f32, std::ops::Range<usize>)>| {
+            let Some((left, right, range)) = word.take() else {
+                return;
+            };
+            let start = text[..range.start]
+                .char_indices()
+                .rev()
+                .find(|(_, c)| between_words(*c))
+                .map_or(0, |(at, c)| at + c.len_utf8());
+            let end = text[range.end..]
+                .find(between_words)
+                .map_or(text.len(), |at| range.end + at);
+            page.words.push(WordArea {
+                left,
+                top,
+                right,
+                bottom,
+                text: text[start..end].to_owned(),
+            });
+        };
+        // A run's clusters span all its glyph runs, one per style, so each
+        // run is walked once, from where its first glyph run starts.
+        let mut walked = None;
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(run) = item else {
+                finish(&mut word);
+                continue;
+            };
+            if walked.replace(run.run().index()) == Some(run.run().index()) {
+                continue;
+            }
+            let mut x = x0 + run.offset();
+            for cluster in run.run().clusters() {
+                let range = cluster.text_range();
+                let advance = cluster.advance();
+                let Some(piece) = text.get(range.clone()) else {
+                    continue;
+                };
+                let inked = piece.chars().any(|c| !between_words(c) && c != SOFT_HYPHEN);
+                if inked {
+                    match &mut word {
+                        Some((_, right, at)) => {
+                            *right = x + advance;
+                            at.end = range.end;
+                        }
+                        None => word = Some((x, x + advance, range)),
+                    }
+                } else if piece.chars().any(between_words) {
+                    finish(&mut word);
+                }
+                x += advance;
+            }
+        }
+        finish(&mut word);
     }
 
     fn style(&self, block: &Block, previous: Option<&Block>) -> BlockStyle {
@@ -1107,7 +1213,7 @@ mod tests {
         typesetter.draw_lines(&mut page, at, 0, 0..placed.lines.len(), 100.0, &mut |_| {
             None
         });
-        let Page { canvas, links } = page;
+        let Page { canvas, links, .. } = page;
         assert_eq!(links.len(), 2, "one area per line: {links:?}");
         assert!(links.iter().all(|l| l.target == target));
         assert!(links[0].bottom <= links[1].top + 0.5);
@@ -1134,6 +1240,108 @@ mod tests {
         let margin = (settings.width - settings.margin_side) as f32;
         assert!((links[0].right - margin).abs() < 1.0, "{links:?}");
         assert!(links[1].right < margin - 40.0, "{links:?}");
+    }
+
+    #[test]
+    fn words_are_found_where_they_are_drawn() {
+        let settings = Settings::default();
+        let mut typesetter = Typesetter::new(settings.clone(), Some("en"));
+        let chapter = hyphenated_chapter();
+        let at = ChapterRef {
+            index: 0,
+            chapter: &chapter,
+            images: &[],
+        };
+        let placed = typesetter.block(at, 0);
+        let mut page = Page::new(settings.width, settings.height);
+        typesetter.draw_lines(&mut page, at, 0, 0..placed.lines.len(), 100.0, &mut |_| {
+            None
+        });
+        let word = format!("ex{SOFT_HYPHEN}tra{SOFT_HYPHEN}or{SOFT_HYPHEN}di{SOFT_HYPHEN}nary");
+        // Every piece, whole or broken at a hyphen, reads as the whole word.
+        assert!(
+            page.words.iter().all(|w| w.text == word),
+            "{:?}",
+            page.words
+        );
+        let broken = typesetter.hyphens.iter().filter(|h| **h).count();
+        assert!(broken > 3);
+        assert_eq!(page.words.len(), 60 + broken);
+        // Left to right along a line, without overlapping, inside the
+        // column; lines one under the other.
+        let (left, right) = (
+            settings.margin_side as f32,
+            (settings.width - settings.margin_side) as f32,
+        );
+        for pair in page.words.windows(2) {
+            let (a, b) = (&pair[0], &pair[1]);
+            assert!(a.left >= left - 0.5 && a.right <= right + 0.5, "{a:?}");
+            assert!(a.right > a.left + 10.0, "{a:?}");
+            if (a.top - b.top).abs() < 0.5 {
+                assert!(a.right + 5.0 < b.left, "a space between {a:?} and {b:?}");
+            } else {
+                assert!(a.bottom <= b.top + 0.5, "{a:?} {b:?}");
+            }
+        }
+        let first = &page.words[0];
+        assert_eq!(first.distance(first.left + 1.0, first.top + 1.0), 0.0);
+        assert!(first.distance(first.left - 10.0, first.top) > 9.0);
+    }
+
+    #[test]
+    fn dashes_and_slashes_come_between_words() {
+        let settings = Settings::default();
+        let mut typesetter = Typesetter::new(settings.clone(), Some("en"));
+        let chapter = Chapter {
+            blocks: vec![Block {
+                kind: BlockKind::Paragraph {
+                    indent_first: false,
+                },
+                indent: 0,
+                align: Align::Default,
+                spans: vec![
+                    Span::plain("\u{201c}Well\u{2014}the dog\u{2019}s "),
+                    Span {
+                        link: Some(Position {
+                            chapter: 1,
+                            block: 0,
+                            offset: 0,
+                        }),
+                        ..Span::plain("well-known")
+                    },
+                    Span::plain(" and/or bone,\u{201d} she said."),
+                ],
+            }],
+        };
+        let at = ChapterRef {
+            index: 0,
+            chapter: &chapter,
+            images: &[],
+        };
+        let placed = typesetter.block(at, 0);
+        let mut page = Page::new(settings.width, settings.height);
+        typesetter.draw_lines(&mut page, at, 0, 0..placed.lines.len(), 100.0, &mut |_| {
+            None
+        });
+        let words: Vec<&str> = page.words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(
+            words,
+            [
+                "\u{201c}Well",
+                "the",
+                "dog\u{2019}s",
+                "well-known",
+                "and",
+                "or",
+                "bone,\u{201d}",
+                "she",
+                "said."
+            ]
+        );
+        // Where the link's ink is, so is its word.
+        let (link, word) = (&page.links[0], &page.words[3]);
+        assert!((link.left - word.left).abs() < 2.0, "{link:?} {word:?}");
+        assert!((link.right - word.right).abs() < 2.0, "{link:?} {word:?}");
     }
 
     #[test]

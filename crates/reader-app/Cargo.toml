@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 book-format = { path = "../book-format" }
+dictionary = { path = "../dictionary" }
 reader-core = { path = "../reader-core" }
 reader-sync = { path = "../reader-sync" }
 serde = { version = "1", features = ["derive"] }

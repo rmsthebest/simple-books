@@ -33,7 +33,7 @@ pub use guard::TurnGuard;
 pub use paginate::{PageMap, PageRef, PageStart, paginate};
 pub use picture::Picture;
 pub use reader::{Reader, ReaderError, Turn, paginate_book};
-pub use typeset::Typesetter;
+pub use typeset::{Typesetter, WordArea};
 
 /// Bumped whenever a change here would put page breaks somewhere else, so
 /// page maps cached on disk are made again.
