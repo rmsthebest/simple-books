@@ -252,8 +252,17 @@ coordinates.
     loaded once and never unloaded.
   - **Power:** echo `1` to `/dev/wmtWifi` to turn it on and `0` to turn it off. Before
     that, KOReader writes a debug sequence to `/proc/driver/wmt_dbg`: `0xDB9DB9`, `7 9 0`,
-    sleep 1 s, `0xDB9DB9`, `7 9 1`.
-  - **Connect:** `ifconfig wlan0 up`, then
+    sleep 1 s, `0xDB9DB9`, `7 9 1`. That's only needed once `wmt_launcher` has just
+    started: with it already running, `echo 1` works at once without it (tried 2026-11-11,
+    saving 2.3 s).
+  - **Connect:** `ifconfig wlan0 up`, which works as soon as the chip is on (no need for
+    KOReader's `sleep 1`), then
     `wpa_supplicant -D nl80211 -i wlan0 -c /mnt/onboard/.kobo/wpa_supplicant.conf -C /var/run/wpa_supplicant -B`,
-    then `dhcpcd`.
+    then `dhcpcd`. Joining takes about 1 s. `/etc/dhcpcd.conf` already has `noarp`,
+    `rapid_commit` and `persistent`; stopping it with `-x` keeps the lease, and asking
+    for it again takes about 1 s, steadier than a new one (0.4–2.2 s). `persistent`
+    leaves the address on `wlan0`, so `wifi.sh` flushes it.
+  - **Timings, 2026-11-11, on a 5 GHz WPA2 network:** `wifi.sh up` took 6.2–7.0 s with
+    KOReader's steps and 1.8–3.1 s after the changes above, with the drivers and
+    launcher already running. `down` takes 0.3–0.4 s.
   - KOReader's `enable-wifi.sh` and `disable-wifi.sh` are the reference.

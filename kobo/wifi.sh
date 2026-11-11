@@ -37,9 +37,39 @@ associated() {
     wpa_cli -i "${INTERFACE}" status 2>/dev/null | grep -q '^wpa_state=COMPLETED'
 }
 
-down() {
-    quiet dhcpcd -d -k "${INTERFACE}"
+# Stops the DHCP client, keeping the lease: the next `up` asks for the same
+# address again, which the router answers sooner than a new request. Without
+# the address it's left on the interface (dhcpcd.conf says `persistent`), so
+# a DHCP that fails next time can't pass for one that worked.
+stop_dhcp() {
+    quiet dhcpcd -d -x "${INTERFACE}"
     quiet killall -q -TERM udhcpc default.script
+    quiet ip addr flush dev "${INTERFACE}"
+}
+
+# Turns the chip on, trying every tenth of a second, $1 times.
+power_on() {
+    tries=0
+    until echo 1 >/dev/wmtWifi 2>/dev/null; do
+        tries=$((tries + 1))
+        [ ${tries} -ge "$1" ] && return 1
+        usleep 100000
+    done
+}
+
+# As Nickel does once it has started the launcher: power the chip down and
+# up through the driver's debug interface. Only needed then: with the
+# launcher already running, the chip turns on without it, 2.3 s sooner.
+power_cycle() {
+    echo "0xDB9DB9" >/proc/driver/wmt_dbg
+    echo "7 9 0" >/proc/driver/wmt_dbg
+    sleep 1
+    echo "0xDB9DB9" >/proc/driver/wmt_dbg
+    echo "7 9 1" >/proc/driver/wmt_dbg
+}
+
+down() {
+    stop_dhcp
     quiet wpa_cli -i "${INTERFACE}" terminate
     quiet ifconfig "${INTERFACE}" down
     # The driver stays loaded; the chip is powered off instead.
@@ -66,7 +96,9 @@ up() {
     # ready"). wmt_loader sets the driver up and exits; wmt_launcher stays,
     # loading the chip's patch and looking after it. They get no terminal
     # and no pipe, so nothing waits on them.
+    launched=""
     if ! pkill -0 wmt_launcher; then
+        launched=1
         wmt_loader </dev/null >/dev/null 2>&1 &
         loader=$!
         tries=0
@@ -76,25 +108,26 @@ up() {
         done
         wmt_launcher -p /lib/firmware </dev/null >/dev/null 2>&1 &
     fi
-    # As Nickel does: the driver's debug interface, then power on.
-    echo "0xDB9DB9" >/proc/driver/wmt_dbg
-    echo "7 9 0" >/proc/driver/wmt_dbg
-    sleep 1
-    echo "0xDB9DB9" >/proc/driver/wmt_dbg
-    echo "7 9 1" >/proc/driver/wmt_dbg
     # The driver refuses until the chip is ready: about a second and a half
-    # after the launcher starts, at boot.
-    tries=0
-    until echo 1 >/dev/wmtWifi 2>/dev/null; do
-        tries=$((tries + 1))
-        if [ ${tries} -gt 20 ]; then
+    # after the launcher starts, at boot. Should the chip not turn on
+    # without the power cycle, it gets one after all.
+    if [ -n "${launched}" ] || ! power_on 10; then
+        power_cycle
+        if ! power_on 100; then
             echo "The Wi-Fi chip didn't turn on."
             return 1
         fi
-        usleep 500000
+    fi
+    # The interface comes up once the chip is on: at once, on the Clara BW.
+    tries=0
+    until quiet ifconfig "${INTERFACE}" up; do
+        tries=$((tries + 1))
+        if [ ${tries} -gt 50 ]; then
+            echo "The Wi-Fi chip didn't turn on."
+            return 1
+        fi
+        usleep 100000
     done
-    sleep 1
-    quiet ifconfig "${INTERFACE}" up
 
     # The networks moved here in firmware 5.
     conf=/mnt/onboard/.kobo/wpa_supplicant.conf
@@ -112,16 +145,15 @@ up() {
     tries=0
     until associated; do
         tries=$((tries + 1))
-        if [ ${tries} -gt 40 ]; then
+        if [ ${tries} -gt 200 ]; then
             down
             echo "Couldn't join a Wi-Fi network. Check Wi-Fi works in Nickel."
             return 1
         fi
-        usleep 500000
+        usleep 100000
     done
 
-    quiet dhcpcd -d -k "${INTERFACE}"
-    quiet killall -q -TERM udhcpc default.script
+    stop_dhcp
     if [ -x /sbin/dhcpcd ]; then
         quiet dhcpcd -d -t 30 -w "${INTERFACE}"
     else
