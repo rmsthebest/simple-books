@@ -71,6 +71,29 @@ impl Layout {
     }
 }
 
+/// What's up while Nickel starts, once Connect is tapped: Nickel takes a
+/// while, and then asks again itself.
+const LEAVING: [&str; 2] = [
+    "Starting Nickel to connect, which takes a little while.",
+    "When Nickel asks, tap Connect. Unplug the Kobo when you're done, and Simple Books \
+     comes back.",
+];
+
+/// The screen left up while the reader hands over to Nickel.
+pub(crate) fn draw_leaving(canvas: &mut Canvas, ui: &mut Typesetter, status: &str) {
+    canvas.clear();
+    ui::header(canvas, ui, "USB", status);
+    let room = canvas.width() as f32 - 2.0 * MARGIN;
+    let mut y = TEXT_TOP;
+    for text in LEAVING {
+        for line in ui::wrap(ui, text, LABEL_SIZE, 400.0, room, 6) {
+            ui.draw_label(canvas, &line, (MARGIN, y), LABEL_SIZE, 400.0);
+            y += LINE;
+        }
+        y += LINE / 2.0;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

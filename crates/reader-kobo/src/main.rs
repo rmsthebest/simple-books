@@ -133,16 +133,24 @@ fn main() {
         .position(|a| a == "--dir")
         .and_then(|at| args.get(at + 1))
         .map_or_else(|| PathBuf::from(APP_DIR), PathBuf::from);
-    open_log(&dir);
+    let after = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|at| args.get(at + 1))
+    };
     std::panic::set_hook(Box::new(|info| log!("panic: {info}")));
-    if let Some(nickel) = args
-        .iter()
-        .position(|a| a == "--in-nickel")
-        .and_then(|at| args.get(at + 1))
-    {
+    if let Some(nickel) = after("--usb-wait") {
+        // Opens the log itself, once the computer has given the drive back.
+        in_nickel::usb_wait(&dir, nickel);
+        return;
+    }
+    if let Some(nickel) = after("--in-nickel") {
+        sys::leave_nickels_files();
+        open_log(&dir);
         in_nickel::run(&dir, nickel);
         return;
     }
+    open_log(&dir);
     let boot = args.iter().any(|a| a == "--boot");
     log!("starting{}", if boot { " at boot" } else { "" });
     match run(&dir, boot) {
@@ -180,7 +188,7 @@ fn request(dir: &Path, name: &str) {
     sys::sync();
 }
 
-fn open_log(dir: &Path) {
+pub(crate) fn open_log(dir: &Path) {
     let _ = fs::create_dir_all(dir);
     let path = dir.join("reader.log");
     if fs::metadata(&path).is_ok_and(|m| m.len() > LOG_LIMIT)
@@ -193,6 +201,13 @@ fn open_log(dir: &Path) {
         && let Ok(mut log) = LOG.lock()
     {
         *log = Some(file);
+    }
+}
+
+/// Stops writing to `reader.log`, closing it.
+pub(crate) fn close_log() {
+    if let Ok(mut log) = LOG.lock() {
+        *log = None;
     }
 }
 

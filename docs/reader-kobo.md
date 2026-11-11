@@ -138,7 +138,8 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   used next time you open the book, unless you're reading it. **Unpair**, tapped twice,
   stops syncing and leaves the books on the reader.
 - **USB:** plugged into a computer, the reader offers **Connect**, which saves your place
-  and leaves for Nickel. Nickel then offers to connect, as it always does, and Simple
+  and leaves for Nickel, saying so while Nickel starts. Nickel then offers to connect, as
+  it always does: tap **Connect** there too. Simple
   Books comes back a few seconds after the cable is unplugged. **Not now** goes back to where you
   were, and it doesn't ask again until the cable is plugged in again. A charger doesn't
   count. Plugged in while asleep, it asks on waking.
@@ -239,12 +240,16 @@ and the Kobo installs files there from `.kobo/Kobo.tgz` when it starts. So:
   Qt and no libc, only a few system calls, so it can't disturb Nickel or depend on the
   firmware's libraries. With a file called `no-plugin` in `.adds/simple-books/` it does
   nothing.
-- **The helper,** `reader-kobo --in-nickel`, checks the pid is Nickel's, acts on what's
-  been asked for with a file in the app folder, and exits:
+- **The helper,** `reader-kobo --in-nickel`, closes the files it inherited from Nickel
+  and leaves for `/`, checks the pid is Nickel's, acts on what's been asked for with a
+  file in the app folder, and exits:
   - `uninstall`: turns booting into the reader off and removes the plugin;
   - `install-boot`: turns booting into the reader on;
   - `start-reader`: starts `reader.sh` once Nickel has settled;
-  - `usb-return`: waits for the computer to be unplugged, then starts `reader.sh`.
+  - `usb-return`: waits for the computer to be unplugged, then starts `reader.sh`. It
+    waits as a copy of itself in `/tmp` (`--usb-wait`), with nothing open on
+    `/mnt/onboard`, not even `reader.log`: to share the drive, Nickel has to unmount it,
+    and anything still using it leaves the computer with an empty drive.
 - **Who asks:** the website's installer writes `install-boot` and `start-reader`. The
   reader writes `usb-return` when it hands over for USB, and `uninstall` from its Kobo
   screen. What the helper does goes in `reader.log`.

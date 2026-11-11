@@ -1204,8 +1204,12 @@ fn a_computer_plugged_in_offers_nickel_for_usb() {
     run.device
         .files
         .retain(|name, _| !name.starts_with("position-"));
+    let offer = run.device.last;
     assert_eq!(run.tap(USB_CONNECT.0, USB_CONNECT.1), Flow::Usb);
     assert!(run.device.files.keys().any(|k| k.starts_with("position-")));
+    // Nickel takes a while, so the screen says so first.
+    assert_ne!(run.device.last, offer);
+    assert_eq!(run.device.shown.last(), Some(&Refresh::Full));
 }
 
 #[test]

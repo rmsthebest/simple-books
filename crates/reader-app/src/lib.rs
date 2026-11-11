@@ -1706,6 +1706,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         match layout.hit(x, y) {
             Some(usb_page::Action::Connect) => {
                 self.save(device);
+                // Nickel takes a while to come up: say what's happening.
+                let status = self.status_text(device, now);
+                usb_page::draw_leaving(&mut self.screen, &mut self.ui, &status);
+                device.show(&self.screen, Refresh::Full);
                 Ok(Flow::Usb)
             }
             Some(usb_page::Action::NotNow) => {

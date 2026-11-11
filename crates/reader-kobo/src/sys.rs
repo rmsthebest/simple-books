@@ -454,6 +454,37 @@ pub(crate) fn sync() {
     unsafe { libc::sync() }
 }
 
+/// Closes every descriptor past stderr and leaves for `/`, as the helper
+/// started from inside Nickel does first. It inherits Nickel's open files
+/// and working directory, and any of them on `/mnt/onboard` would keep
+/// Nickel from unmounting it to hand it to a computer over USB.
+pub(crate) fn leave_nickels_files() {
+    let fds: Vec<libc::c_int> = std::fs::read_dir("/proc/self/fd")
+        .map(|dir| {
+            dir.flatten()
+                .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
+                .filter(|fd| *fd > 2)
+                .collect()
+        })
+        .unwrap_or_default();
+    for fd in fds {
+        // SAFETY: nothing in this process owns these yet: they came with
+        // it. The one read_dir used is already closed, and closing it
+        // again only fails.
+        unsafe {
+            libc::close(fd);
+        }
+    }
+    let _ = std::env::set_current_dir("/");
+}
+
+/// Lets `file` stay open in a program this one `exec`s, so a lock held on
+/// it stays held.
+pub(crate) fn keep_across_exec(file: &File) -> io::Result<()> {
+    // SAFETY: fcntl on a descriptor this File owns.
+    check(unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) })
+}
+
 /// Makes `command` start in a session of its own, so it outlives whoever
 /// started it and gets no signals meant for them.
 pub(crate) fn own_session(command: &mut std::process::Command) {

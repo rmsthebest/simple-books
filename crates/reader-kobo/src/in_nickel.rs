@@ -12,7 +12,10 @@
 //! - `start-reader`: start the reader once Nickel is up. The installer asks
 //!   for this too, so the reader is the first thing seen after ejecting.
 //! - `usb-return`: the reader handed over to Nickel for USB. Once the
-//!   computer is unplugged, the reader starts again.
+//!   computer is unplugged, the reader starts again. Waiting for that is a
+//!   copy of this program in `/tmp` (`--usb-wait`), with nothing open on
+//!   `/mnt/onboard`: Nickel unmounts it to hand it to the computer, and
+//!   can't while anything uses it.
 //!
 //! With nothing asked for it exits at once. The plugin starts it in every
 //! process that loads image plugins, so it checks that `<pid>` is Nickel's
@@ -20,13 +23,16 @@
 
 use std::{
     fs::{self, File},
-    os::fd::AsFd,
+    os::{
+        fd::AsFd,
+        unix::{fs::PermissionsExt, process::CommandExt},
+    },
     path::Path,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
-use crate::{drain, log, online, plugged_into_computer, sys};
+use crate::{close_log, drain, log, online, open_log, plugged_into_computer, sys};
 
 pub(crate) const UNINSTALL: &str = "uninstall";
 const INSTALL_BOOT: &str = "install-boot";
@@ -44,6 +50,11 @@ const SETTLE: Duration = Duration::from_secs(5);
 const AFTER_UNPLUG: Duration = Duration::from_secs(3);
 /// How often to check Nickel is still there, while waiting.
 const CHECK: Duration = Duration::from_secs(10);
+/// The copy of this program that waits out USB, in memory rather than on
+/// the drive the computer gets.
+const WAITER: &str = "/tmp/simple-books-usb-wait";
+/// How long after unplugging to wait for Nickel to mount the drive again.
+const REMOUNT_LONGEST: Duration = Duration::from_secs(60);
 
 pub(crate) fn run(dir: &Path, nickel: &str) {
     let comm = fs::read_to_string(format!("/proc/{nickel}/comm")).unwrap_or_default();
@@ -54,7 +65,7 @@ pub(crate) fn run(dir: &Path, nickel: &str) {
         );
         return;
     }
-    let Some(_lock) = lock() else {
+    let Some(lock) = lock() else {
         log!("in-nickel: another one is running");
         return;
     };
@@ -75,7 +86,7 @@ pub(crate) fn run(dir: &Path, nickel: &str) {
     }
     if dir.join(USB_RETURN).exists() {
         if plugged_into_computer() {
-            back_after_usb(dir, nickel);
+            back_after_usb(dir, nickel, &lock);
         } else {
             // Left from a hand-over that ended some other way, such as a
             // restart.
@@ -137,17 +148,63 @@ fn start_reader(dir: &Path) {
     }
 }
 
-/// Waits for the computer to be unplugged, then starts the reader. Gives up
-/// if Nickel goes away.
-fn back_after_usb(dir: &Path, nickel: &str) {
+/// Becomes [`usb_wait`], run from a copy in `/tmp`, keeping `lock`. If
+/// that can't be done, the reader won't come back on its own after USB, but
+/// USB still works.
+fn back_after_usb(dir: &Path, nickel: &str, lock: &File) {
+    let copied = std::env::current_exe()
+        .and_then(|exe| fs::copy(exe, WAITER))
+        .and_then(|_| fs::set_permissions(WAITER, fs::Permissions::from_mode(0o755)))
+        .and_then(|()| sys::keep_across_exec(lock));
+    if let Err(error) = copied {
+        log!("in-nickel: can't wait for USB to end from {WAITER}: {error}");
+        take(dir, USB_RETURN);
+        return;
+    }
     log!("in-nickel: back to the reader once the computer is unplugged");
-    let events = match sys::uevents() {
-        Ok(events) => Some(events),
-        Err(error) => {
-            log!("in-nickel: no device events, so checking every 10 s: {error}");
-            None
-        }
-    };
+    close_log();
+    let error = Command::new(WAITER)
+        .arg("--usb-wait")
+        .arg(nickel)
+        .arg("--dir")
+        .arg(dir)
+        .current_dir("/")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .exec();
+    open_log(dir);
+    log!("in-nickel: starting {WAITER}: {error}");
+    take(dir, USB_RETURN);
+}
+
+/// `reader-kobo --usb-wait <pid>`, from [`WAITER`]: waits for the computer
+/// to be unplugged, touching nothing on `/mnt/onboard` meanwhile, not even
+/// the log, then starts the reader once Nickel has the drive back. Gives up
+/// if Nickel goes away. The lock from `--in-nickel` is still held.
+pub(crate) fn usb_wait(dir: &Path, nickel: &str) {
+    // It runs on without the file.
+    let _ = fs::remove_file(WAITER);
+    let unplugged = wait_for_unplug(nickel);
+    let started = Instant::now();
+    while !dir.join("reader.sh").exists() && started.elapsed() < REMOUNT_LONGEST {
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    open_log(dir);
+    if !unplugged {
+        log!("in-nickel: Nickel stopped while plugged into the computer");
+        return;
+    }
+    log!("in-nickel: unplugged from the computer");
+    take(dir, USB_RETURN);
+    std::thread::sleep(AFTER_UNPLUG);
+    start_reader(dir);
+}
+
+/// Waits until the computer's unplugged (true), or Nickel stops (false).
+fn wait_for_unplug(nickel: &str) -> bool {
+    // Without device events, it checks every 10 s.
+    let events = sys::uevents().ok();
     let alive = || Path::new(&format!("/proc/{nickel}")).exists();
     while alive() {
         match &events {
@@ -160,11 +217,8 @@ fn back_after_usb(dir: &Path, nickel: &str) {
             None => std::thread::sleep(CHECK),
         }
         if !plugged_into_computer() {
-            take(dir, USB_RETURN);
-            std::thread::sleep(AFTER_UNPLUG);
-            start_reader(dir);
-            return;
+            return true;
         }
     }
-    log!("in-nickel: Nickel stopped");
+    false
 }
