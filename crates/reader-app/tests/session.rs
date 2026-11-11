@@ -715,17 +715,18 @@ const HOME_SETTINGS: (f32, f32) = (776.0, 1376.0);
 /// On the settings screen: a row's − or +, the toggles, and Done.
 fn setting(row: u8, up: bool) -> (f32, f32) {
     let x = if up { 970.0 } else { 932.0 - 180.0 - 38.0 };
-    (x, 463.0 + f32::from(row) * 88.0)
+    (x, 397.0 + f32::from(row) * 84.0)
 }
 const FONT: u8 = 0;
 /// The font row's − sits further left, to leave room for the name.
-const FONT_DOWN: (f32, f32) = (242.0, 463.0);
+const FONT_DOWN: (f32, f32) = (242.0, 397.0);
 const LINE_SPACING: u8 = 2;
 const DARKNESS: u8 = 4;
 const LIGHT: u8 = 6;
 const TURN_GUARD: u8 = 8;
-const JUSTIFIED: (f32, f32) = (296.0, 1253.0);
-const DARK: (f32, f32) = (856.0, 1253.0);
+const JUSTIFIED: (f32, f32) = (296.0, 1163.0);
+const DARK: (f32, f32) = (296.0, 1267.0);
+const WARM_EVENINGS: (f32, f32) = (776.0, 1267.0);
 /// Sync, Kobo and Done along the bottom.
 const SETTINGS_SYNC: (f32, f32) = (216.0, 1376.0);
 const SETTINGS_KOBO: (f32, f32) = (536.0, 1376.0);
@@ -1094,6 +1095,96 @@ fn dark_mode_is_kept_and_left_off_for_switching_off() {
     run.send(Event::PowerHeld);
     run.tap(POWER_OFF.0, POWER_OFF.1);
     assert!(!run.device.dark);
+}
+
+const WARMTH: u8 = 7;
+const HOUR: u64 = 60 * 60;
+/// 2026-11-11 at midnight, in UTC, the fake's time zone.
+const NOV_11: u64 = 1_794_355_200;
+
+impl Run {
+    /// The warmth the light was last set to, if it was.
+    fn warmth(&self) -> Option<u8> {
+        self.device.light.map(|light| light.warmth)
+    }
+
+    /// Moves the clock to `hours` after midnight on 11 November, and waits
+    /// for the next check.
+    fn at_hour(&mut self, hours: f32) {
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let seconds = (hours * 3600.0) as u64;
+        self.device.clock = NOV_11 + seconds;
+        self.tick_after(BATTERY_CHECK);
+    }
+
+    /// From midday, on the settings screen with warm evenings on.
+    fn warm_evenings() -> Self {
+        let mut run = Run::with(Fake {
+            can_suspend: true,
+            clock: NOV_11 + 12 * HOUR,
+            ..Fake::default()
+        });
+        run.settings();
+        run.tap(WARM_EVENINGS.0, WARM_EVENINGS.1);
+        assert!(run.session.preferences().warm_evenings);
+        run
+    }
+}
+
+#[test]
+fn warm_evenings_warm_the_light_through_the_evening_and_back_by_morning() {
+    // The fake's light starts at warmth 4.
+    let mut run = Run::warm_evenings();
+    assert_eq!(run.warmth(), None, "by day it's left as it is");
+    run.at_hour(20.5);
+    assert_eq!(run.warmth(), Some(7), "half way to the warmest");
+    run.at_hour(23.0);
+    assert_eq!(run.warmth(), Some(10));
+    run.at_hour(24.0 + 5.0);
+    assert_eq!(run.warmth(), Some(10));
+    run.at_hour(24.0 + 8.0);
+    assert_eq!(run.warmth(), Some(4), "the day's again");
+    assert_eq!(run.session.preferences().light, None, "nothing was chosen");
+}
+
+#[test]
+fn a_warmth_chosen_in_the_evening_holds_until_morning() {
+    let mut run = Run::warm_evenings();
+    run.at_hour(22.0);
+    assert_eq!(run.warmth(), Some(10));
+    run.step(WARMTH, false);
+    assert_eq!(run.warmth(), Some(9));
+    run.at_hour(23.0);
+    assert_eq!(run.warmth(), Some(9), "held");
+    let day = run.session.preferences().light.map(|light| light.warmth);
+    assert_eq!(day, Some(4), "the day's warmth stays");
+    run.at_hour(24.0 + 8.0);
+    assert_eq!(run.warmth(), Some(4));
+    run.at_hour(24.0 + 20.5);
+    assert_eq!(run.warmth(), Some(7), "and the next evening is warm again");
+}
+
+#[test]
+fn a_warmth_chosen_by_day_is_where_the_evening_starts_from() {
+    let mut run = Run::warm_evenings();
+    run.step(WARMTH, true);
+    assert_eq!(run.warmth(), Some(5));
+    let day = run.session.preferences().light.map(|light| light.warmth);
+    assert_eq!(day, Some(5));
+    run.at_hour(20.5);
+    assert_eq!(run.warmth(), Some(8), "half way from 5 to 10, rounded");
+}
+
+#[test]
+fn turned_off_in_the_evening_the_light_is_the_days_again() {
+    let mut run = Run::warm_evenings();
+    run.at_hour(23.0);
+    assert_eq!(run.warmth(), Some(10));
+    run.tap(WARM_EVENINGS.0, WARM_EVENINGS.1);
+    assert!(!run.session.preferences().warm_evenings);
+    assert_eq!(run.warmth(), Some(4));
+    run.at_hour(23.5);
+    assert_eq!(run.warmth(), Some(4));
 }
 
 #[test]

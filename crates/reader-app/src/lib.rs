@@ -20,6 +20,8 @@
 //!   front light, warmth, text size, darkness and contrast, a way back from
 //!   a link, and [`settings`], which return to the book. The way out to
 //!   Nickel is on the power screen ([`power_page`]), held power button.
+//! - **Warm evenings,** from [`settings`]: the light grows warmer through
+//!   the evening and back in the morning ([`evening`]).
 //! - **Looking up:** a finger resting on a word ([`Event::Hold`]) shows
 //!   its Swedish translations ([`lookup`]), from the dictionary file
 //!   [`DICTIONARY`], read the first time it's needed. A tap closes it.
@@ -42,6 +44,7 @@
 #![allow(clippy::cast_precision_loss, reason = "pixel sizes")]
 
 mod book;
+mod evening;
 mod folder;
 mod home;
 mod kobo_page;
@@ -325,6 +328,8 @@ pub struct Preferences {
     /// Light text on black, everywhere but the sleep and switched-off
     /// screens.
     pub dark: bool,
+    /// The light grows warmer in the evening ([`evening`]).
+    pub warm_evenings: bool,
 }
 
 impl Default for Preferences {
@@ -344,6 +349,7 @@ impl Default for Preferences {
             margin: settings.margin_side,
             turn_guard_ms: 300,
             dark: false,
+            warm_evenings: false,
         }
     }
 }
@@ -432,6 +438,10 @@ enum Back {
     Reading,
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each is something that happened, unrelated to the others"
+)]
 pub struct Session<R> {
     books: Arc<dyn Books<R>>,
     library: Library,
@@ -441,7 +451,12 @@ pub struct Session<R> {
     /// The settings screen's sample, and the settings it was laid out with.
     preview: Option<(Settings, Option<Canvas>)>,
     preferences: Preferences,
+    /// The light as it is, which with warm evenings can be warmer than
+    /// the one chosen for the day, `day_light`.
     light: Light,
+    day_light: Light,
+    /// The warmth was changed in the evening: it stays so until morning.
+    warmth_held: bool,
     /// For the menu, the home screen and the sleep screen.
     ui: Typesetter,
     /// Whatever isn't a plain page: the home screen, or the page with the
@@ -516,6 +531,8 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             guard: preferences.turn_guard(),
             preferences,
             light,
+            day_light: light,
+            warmth_held: false,
             ui: Typesetter::new(Settings::default(), Some("en")),
             screen: Canvas::new(settings.width, settings.height),
             mode: Mode::Reading,
@@ -980,7 +997,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         if !matches!(event, Event::Tick) {
             self.last_touch = now;
         }
-        if let Some(flow) = self.check_battery(now, device) {
+        if let Some(flow) = self.each_minute(now, device) {
             return Ok(flow);
         }
         // Only a page has words to look up.
@@ -1360,17 +1377,23 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 if changed == settings::Changed::Nothing {
                     return Ok(());
                 }
-                self.setting_changed(changed, device);
+                self.setting_changed(setting, changed, device);
                 self.show_settings(device, Refresh::Partial, now);
             }
             Some(settings::Action::Toggle(toggle)) => {
                 toggle.flip(&mut self.preferences);
                 save_json(device, PREFERENCES, &self.preferences);
-                let refresh = if toggle == settings::Toggle::Dark {
-                    device.set_dark(self.preferences.dark);
-                    Refresh::Full
-                } else {
-                    Refresh::Partial
+                let refresh = match toggle {
+                    settings::Toggle::Dark => {
+                        device.set_dark(self.preferences.dark);
+                        Refresh::Full
+                    }
+                    settings::Toggle::WarmEvenings => {
+                        self.warmth_held = false;
+                        self.follow_evening(device);
+                        Refresh::Partial
+                    }
+                    settings::Toggle::Justify | settings::Toggle::Hyphenate => Refresh::Partial,
                 };
                 self.show_settings(device, refresh, now);
             }
@@ -1502,11 +1525,26 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
 
     /// Saves a changed setting, and passes on what the device or the guard
     /// needs to know.
-    fn setting_changed(&mut self, changed: settings::Changed, device: &mut dyn Device) {
+    /// With warm evenings, a change to the warmth in the evening holds
+    /// until morning and leaves the day's as it was.
+    fn setting_changed(
+        &mut self,
+        setting: settings::Setting,
+        changed: settings::Changed,
+        device: &mut dyn Device,
+    ) {
         match changed {
             settings::Changed::Light => {
                 device.set_light(self.light);
-                self.preferences.light = Some(self.light);
+                self.day_light.brightness = self.light.brightness;
+                if setting == settings::Setting::Warmth {
+                    if self.evening_share(device) > 0.0 {
+                        self.warmth_held = true;
+                    } else {
+                        self.day_light.warmth = self.light.warmth;
+                    }
+                }
+                self.preferences.light = Some(self.day_light);
             }
             settings::Changed::Guard => self.guard.window = self.preferences.turn_guard().window,
             settings::Changed::Layout | settings::Changed::Drawing | settings::Changed::Nothing => {
@@ -1974,7 +2012,9 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
 
     /// Once [`BATTERY_CHECK`] has passed since the last check: switches off
     /// if the battery is empty.
-    fn check_battery(&mut self, now: Instant, device: &mut dyn Device) -> Option<Flow> {
+    /// Checks the battery, and moves the warmth on with the evening, at
+    /// most once each [`BATTERY_CHECK`].
+    fn each_minute(&mut self, now: Instant, device: &mut dyn Device) -> Option<Flow> {
         let due = self
             .battery_checked
             .is_none_or(|at| now.duration_since(at) >= BATTERY_CHECK);
@@ -1982,7 +2022,40 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             return None;
         }
         self.battery_checked = Some(now);
-        battery_empty(device).then(|| self.switch_off_empty(device))
+        if battery_empty(device) {
+            return Some(self.switch_off_empty(device));
+        }
+        if !matches!(self.mode, Mode::Asleep { .. }) {
+            self.follow_evening(device);
+        }
+        None
+    }
+
+    /// How far into the evening's warmth it is now, from 0 by day to 1 at
+    /// night; always 0 without warm evenings.
+    fn evening_share(&self, device: &mut dyn Device) -> f32 {
+        if !self.preferences.warm_evenings {
+            return 0.0;
+        }
+        let clock = device.clock();
+        evening::share(clock, device.utc_offset(clock))
+    }
+
+    /// Sets the warmth for the time of day, unless it was changed this
+    /// evening, and lets go of that in the morning.
+    fn follow_evening(&mut self, device: &mut dyn Device) {
+        let share = self.evening_share(device);
+        if share <= 0.0 {
+            self.warmth_held = false;
+        }
+        if self.warmth_held {
+            return;
+        }
+        let warmth = evening::warmth(self.day_light.warmth, share);
+        if warmth != self.light.warmth {
+            self.light.warmth = warmth;
+            device.set_light(self.light);
+        }
     }
 
     /// The battery is empty: saves the place and says so, for the platform
@@ -2242,7 +2315,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         match setting.step(step, &mut self.preferences, &mut self.light) {
             settings::Changed::Nothing => Ok(()),
             changed @ (settings::Changed::Light | settings::Changed::Guard) => {
-                self.setting_changed(changed, device);
+                self.setting_changed(setting, changed, device);
                 self.draw_menu(device, now)
             }
             settings::Changed::Layout | settings::Changed::Drawing => self.relayout(device, now),

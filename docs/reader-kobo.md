@@ -108,8 +108,12 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   battery, with ↑ while charging. The time moves on each minute.
 - **Settings** has the font, text size, line spacing, margins, darkness, contrast, the
   light and its warmth, and the turn guard, each with − and +, and **Justified**,
-  **Hyphenated** and **Dark**, light text on black everywhere but the sleep screen's
-  cover and what's left on the screen once it's switched off. **Font** steps from Literata, the reader's own, through the Kobo's
+  **Hyphenated**, **Dark**, light text on black everywhere but the sleep screen's
+  cover and what's left on the screen once it's switched off, and **Warm evenings**.
+  With that on, the light grows warmer from 19:00 to its warmest at 22:00, stays so
+  overnight, and goes back to the warmth chosen for the day between 06:00 and 07:00,
+  by the time zone set in Nickel. Changing the warmth in the evening holds until the
+  morning, leaving the day's as it was. **Font** steps from Literata, the reader's own, through the Kobo's
   fonts (`/usr/share/fonts`) and any put in `fonts/` on its storage over USB, as for
   Nickel; those for Chinese, Japanese and Korean are left out. A font found there is
   read only when it's chosen. Most come in regular and bold only, so darkness shows

@@ -19,10 +19,21 @@ use crate::{
 
 /// The sample's part of the screen, under the header.
 const PREVIEW_TOP: f32 = HEADER + 3.0;
-const PREVIEW_HEIGHT: f32 = 300.0;
-const ROW: f32 = 88.0;
+const PREVIEW_HEIGHT: f32 = 236.0;
+const ROW: f32 = 84.0;
 const ROWS_TOP: f32 = PREVIEW_TOP + PREVIEW_HEIGHT + 12.0;
 const TOGGLE_HEIGHT: f32 = 88.0;
+/// Two rows of toggles: how text is set, then the screen and the light.
+const TOGGLE_ROWS: [[(Toggle, &str); 2]; 2] = [
+    [
+        (Toggle::Justify, "Justified"),
+        (Toggle::Hyphenate, "Hyphenated"),
+    ],
+    [
+        (Toggle::Dark, "Dark"),
+        (Toggle::WarmEvenings, "Warm evenings"),
+    ],
+];
 /// Between a row's − and +.
 const VALUE_WIDTH: f32 = 180.0;
 /// Where the font row's − is: its name needs the room.
@@ -182,6 +193,8 @@ pub(crate) enum Toggle {
     Justify,
     Hyphenate,
     Dark,
+    /// The light grows warmer in the evening.
+    WarmEvenings,
 }
 
 impl Toggle {
@@ -190,6 +203,7 @@ impl Toggle {
             Toggle::Justify => p.justify = !p.justify,
             Toggle::Hyphenate => p.hyphenate = !p.hyphenate,
             Toggle::Dark => p.dark = !p.dark,
+            Toggle::WarmEvenings => p.warm_evenings = !p.warm_evenings,
         }
     }
 
@@ -198,6 +212,7 @@ impl Toggle {
             Toggle::Justify => p.justify,
             Toggle::Hyphenate => p.hyphenate,
             Toggle::Dark => p.dark,
+            Toggle::WarmEvenings => p.warm_evenings,
         }
     }
 }
@@ -247,16 +262,13 @@ impl Layout {
             }
         }
         let toggles_top = ROWS_TOP + ROWS.len() as f32 * ROW + 8.0;
-        let toggles = ui::row(
-            MARGIN,
-            toggles_top,
-            content,
-            TOGGLE_HEIGHT,
-            &[1.0, 1.0, 1.0],
-        );
-        buttons.push((toggles[0], Action::Toggle(Toggle::Justify), "Justified"));
-        buttons.push((toggles[1], Action::Toggle(Toggle::Hyphenate), "Hyphenated"));
-        buttons.push((toggles[2], Action::Toggle(Toggle::Dark), "Dark"));
+        for (i, toggles) in TOGGLE_ROWS.iter().enumerate() {
+            let top = toggles_top + i as f32 * (TOGGLE_HEIGHT + ui::GAP);
+            let row = ui::row(MARGIN, top, content, TOGGLE_HEIGHT, &[1.0, 1.0]);
+            for (rect, (toggle, label)) in row.into_iter().zip(toggles) {
+                buttons.push((rect, Action::Toggle(*toggle), *label));
+            }
+        }
         let bottom = ui::row(
             MARGIN,
             height - BUTTON_HEIGHT - 24.0,
@@ -479,7 +491,7 @@ mod tests {
         let from = 56;
         let most = PREVIEW_HEIGHT as usize;
         let rows = whole_lines(&page, from, most);
-        assert!(rows > 200 && rows <= most, "{rows}");
+        assert!(rows > most * 2 / 3 && rows <= most, "{rows}");
         let width = page.width() as usize;
         let last = &page.pixels()[(from + rows - 1) * width..(from + rows) * width];
         assert!(last.iter().all(|g| *g > 240));
@@ -488,8 +500,8 @@ mod tests {
     #[test]
     fn nothing_overlaps_and_each_button_is_what_it_shows() {
         let layout = Layout::new(1072, 1448);
-        // Three toggles, Sync, Kobo and Done.
-        assert_eq!(layout.buttons.len(), 2 * ROWS.len() + 6);
+        // Four toggles, Sync, Kobo and Done.
+        assert_eq!(layout.buttons.len(), 2 * ROWS.len() + 7);
         for (i, (rect, action, _)) in layout.buttons.iter().enumerate() {
             assert!(rect.top > PREVIEW_TOP + PREVIEW_HEIGHT, "{action:?}");
             assert!(
