@@ -24,7 +24,8 @@
 //!   its Swedish translations ([`lookup`]), from the dictionary file
 //!   [`DICTIONARY`], read the first time it's needed. A tap closes it.
 //! - **Sleep:** the power button, or [`AUTO_SLEEP`] without a touch, saves
-//!   the place and suspends, except while charging, which can hang the
+//!   the place, puts the cover of the book being read on the screen (or a
+//!   notice, without one) and suspends, except while charging, which can hang the
 //!   Clara BW's kernel.
 //! - **Saved:** the place in each book, the preferences, and each book's
 //!   page map once it's complete, through [`Device::save`].
@@ -414,6 +415,10 @@ pub struct Session<R> {
     status_wifi: bool,
     /// Read the first time a word is looked up.
     dictionary: Option<Dictionary>,
+    /// The cover slept on last, by book key, shrunk to the screen: kept,
+    /// so sleeping again doesn't decode it again. `None` for a book
+    /// without one.
+    sleep_cover: Option<(u64, Option<Picture>)>,
 }
 
 impl<R> std::fmt::Debug for Session<R> {
@@ -469,6 +474,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             status_due: None,
             status_wifi: false,
             dictionary: None,
+            sleep_cover: None,
         };
         session.go_home(device, Refresh::Full, now);
         Ok(session)
@@ -1769,7 +1775,56 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     fn sleep(&mut self, device: &mut dyn Device, now: Instant) -> Result<(), AppError> {
         self.save(device);
         let back = self.here();
-        if back == Back::Reading {
+        if let Some(cover) = self.sleep_cover() {
+            draw_cover(&mut self.screen, &cover);
+        } else {
+            self.asleep_notice(&back)?;
+        }
+        device.show(&self.screen, Refresh::Full);
+        self.ssh_off();
+        // What was read goes to the server, so another reader or the
+        // website has it while this one sleeps.
+        let local = self.local_places(device);
+        let sending = self
+            .syncer
+            .as_mut()
+            .is_some_and(|syncer| syncer.send_places(local));
+        self.mode = Mode::Asleep {
+            suspend_at: now + SUSPEND_DELAY,
+            sending_until: sending.then(|| now + SLEEP_SEND_LONGEST),
+            back,
+        };
+        Ok(())
+    }
+
+    /// The cover of the book being read, to sleep on: the open book's, or
+    /// else the one home shows first.
+    fn sleep_cover(&mut self) -> Option<Picture> {
+        let (file, key) = if let Some(book) = &self.book {
+            (book.file.clone(), book.key)
+        } else {
+            let entry = self.library.current()?;
+            (entry.file.clone(), entry.key)
+        };
+        if let Some((kept, cover)) = &self.sleep_cover
+            && *kept == key
+        {
+            return cover.clone();
+        }
+        let has_cover = self.library.get(&file).is_some_and(|entry| entry.cover);
+        let cover = has_cover
+            .then(|| self.books.open(&file).ok())
+            .flatten()
+            .and_then(|mut book| library::cover_picture(&mut book))
+            .map(|cover| cover.fitted(self.screen.width(), self.screen.height()));
+        self.sleep_cover = Some((key, cover.clone()));
+        cover
+    }
+
+    /// Without a cover: the screen that was up, with a band along the
+    /// bottom saying it's asleep.
+    fn asleep_notice(&mut self, back: &Back) -> Result<(), AppError> {
+        if *back == Back::Reading {
             self.compose_page()?;
         }
         // Otherwise `screen` still holds the screen that's up.
@@ -1791,20 +1846,6 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             size,
             500.0,
         );
-        device.show(&self.screen, Refresh::Full);
-        self.ssh_off();
-        // What was read goes to the server, so another reader or the
-        // website has it while this one sleeps.
-        let local = self.local_places(device);
-        let sending = self
-            .syncer
-            .as_mut()
-            .is_some_and(|syncer| syncer.send_places(local));
-        self.mode = Mode::Asleep {
-            suspend_at: now + SUSPEND_DELAY,
-            sending_until: sending.then(|| now + SLEEP_SEND_LONGEST),
-            back,
-        };
         Ok(())
     }
 
@@ -1837,7 +1878,6 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         self.go_back(back, device, now)
     }
 
-    /// Copies the current page into `screen`, to draw over.
     /// Copies the open book's page into `screen`, with its number under it.
     fn compose_page(&mut self) -> Result<(), AppError> {
         let mut number = None;
@@ -1987,6 +2027,22 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
 
 /// "84%", "84%, charging", or nothing if the device doesn't say.
 /// The page number's text size: small, in the bottom margin.
+/// `cover` as large as fits on `screen`, in the middle, on white.
+fn draw_cover(screen: &mut Canvas, cover: &Picture) {
+    let (width, height) = (screen.width(), screen.height());
+    screen.fill(0, 0, width, height, 255);
+    let scale = (width as f32 / cover.width() as f32).min(height as f32 / cover.height() as f32);
+    let fitted = |side: u32, most: u32| ((side as f32 * scale).round() as u32).clamp(1, most);
+    let (to_width, to_height) = (fitted(cover.width(), width), fitted(cover.height(), height));
+    cover.draw(
+        screen,
+        ((width - to_width) / 2) as i32,
+        ((height - to_height) / 2) as i32,
+        to_width,
+        to_height,
+    );
+}
+
 /// The English–Swedish dictionary's file name, made from Folkets lexikon
 /// by the `dictionary` crate.
 pub const DICTIONARY: &str = "dict-en-sv";

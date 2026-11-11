@@ -154,7 +154,9 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   **Uninstall Simple Books** (see [Booting into the reader](#booting-into-the-reader) and
   [Remove it](#if-something-goes-wrong)).
 - **Sleep** with a short press of the power button, or by leaving it alone for 10
-  minutes. The sleep screen comes up at once, and the Kobo suspends 15 seconds later,
+  minutes. The sleep screen, the cover of the book you're reading, comes up at once (a
+  book without a cover leaves the page up with "Asleep" along the bottom), and the Kobo
+  suspends 15 seconds later,
   once the screen has finished with the panel. Press the power button again to wake. It doesn't sleep while plugged in, since
   that can hang the Clara BW's kernel; it stays on the sleep screen and sleeps once
   unplugged.

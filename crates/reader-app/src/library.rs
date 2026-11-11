@@ -241,7 +241,9 @@ impl Library {
 
 /// The book's cover: the image the manifest names, or else, for books
 /// converted before covers were kept, an image alone at the start.
-fn cover_picture(book: &mut BookReader<Cursor<Vec<u8>>>) -> Option<Picture> {
+pub(crate) fn cover_picture<R: std::io::Read + std::io::Seek>(
+    book: &mut BookReader<R>,
+) -> Option<Picture> {
     let index = if let Some(index) = book.manifest().cover {
         index
     } else {

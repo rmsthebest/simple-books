@@ -122,6 +122,8 @@ struct Fake {
     shown: Vec<Refresh>,
     /// The last screen shown, as a checksum.
     last: u64,
+    /// And its pixels.
+    pixels: Vec<u8>,
     light: Option<Light>,
     battery: Option<Battery>,
     can_suspend: bool,
@@ -138,6 +140,8 @@ impl Device for Fake {
         self.last = screen.pixels().iter().enumerate().fold(0u64, |h, (i, p)| {
             h.wrapping_mul(31).wrapping_add(u64::from(*p) ^ i as u64)
         });
+        self.pixels.clear();
+        self.pixels.extend_from_slice(screen.pixels());
     }
     fn battery(&mut self) -> Option<Battery> {
         self.battery
@@ -199,9 +203,13 @@ impl Run {
         run
     }
 
-    fn at_home(mut device: Fake) -> Self {
+    fn at_home(device: Fake) -> Self {
+        Self::at_home_with(Shelf::new(), device)
+    }
+
+    fn at_home_with(shelf: Shelf, mut device: Fake) -> Self {
         let now = Instant::now();
-        let session = Session::start(Arc::new(Shelf::new()), &mut device, now).unwrap();
+        let session = Session::start(Arc::new(shelf), &mut device, now).unwrap();
         assert!(session.at_home());
         Self {
             session,
@@ -1439,4 +1447,105 @@ fn holding_anywhere_but_a_page_is_a_tap() {
         y: MENU_SETTINGS.1,
     });
     assert!(run.session.in_settings(), "but it is in the menu");
+}
+
+/// A book with a cover all one gray, 60 by 90.
+const COVERED: &str = "covered.book";
+const COVER_GRAY: u8 = 90;
+
+fn covered_book() -> Vec<u8> {
+    let mut png = Vec::new();
+    image::GrayImage::from_pixel(60, 90, image::Luma([COVER_GRAY]))
+        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut out = Cursor::new(Vec::new());
+    book_format::write(
+        &mut out,
+        book_format::About {
+            title: "Covered".into(),
+            cover: Some(0),
+            ..book_format::About::default()
+        },
+        Vec::new(),
+        &[Chapter {
+            blocks: (300..310).map(paragraph).collect(),
+        }],
+        &[book_format::NewImage {
+            info: book_format::ImageInfo {
+                width: 60,
+                height: 90,
+                kind: book_format::ImageKind::Png,
+            },
+            bytes: png,
+        }],
+    )
+    .unwrap();
+    out.into_inner()
+}
+
+fn covered_shelf() -> Shelf {
+    let mut shelf = Shelf::new();
+    shelf.0.insert(COVERED.to_owned(), covered_book());
+    shelf
+}
+
+impl Fake {
+    fn pixel(&self, x: usize, y: usize) -> u8 {
+        self.pixels[y * 1072 + x]
+    }
+
+    /// Whether the last screen was the cover, filling the screen's height
+    /// in the middle, with white either side.
+    fn shows_the_cover(&self) -> bool {
+        [(536, 10), (536, 724), (536, 1440)]
+            .iter()
+            .all(|&(x, y)| self.pixel(x, y) == COVER_GRAY)
+            && self.pixel(5, 724) == 255
+            && self.pixel(1066, 724) == 255
+    }
+
+    /// Whether it was the notice along the bottom: its black rule.
+    fn shows_the_asleep_notice(&self) -> bool {
+        self.pixel(536, 1448 - 160 + 1) == 0
+    }
+}
+
+#[test]
+fn asleep_it_shows_the_cover_of_the_book_being_read() {
+    let mut run = Run::at_home_with(
+        covered_shelf(),
+        Fake {
+            can_suspend: true,
+            ..Fake::default()
+        },
+    );
+    run.session.open(COVERED, &mut run.device, run.now).unwrap();
+    run.send(Event::Power);
+    assert!(run.device.shows_the_cover());
+    assert!(!run.device.shows_the_asleep_notice());
+    // Awake, it's back on the page.
+    run.tick_after(SUSPEND_DELAY);
+    assert!(!run.device.shows_the_cover());
+    assert!(run.page().is_some());
+
+    // On the home screen with nothing open, the book home shows first.
+    let mut home = Run::at_home_with(
+        covered_shelf(),
+        Fake {
+            files: run.device.files.clone(),
+            ..Fake::default()
+        },
+    );
+    assert!(home.session.reader().is_none());
+    home.send(Event::Power);
+    assert!(home.device.shows_the_cover());
+}
+
+#[test]
+fn without_a_cover_sleep_says_so_over_the_screen() {
+    let mut run = Run::at_home_with(covered_shelf(), Fake::default());
+    run.session.open(BOOK, &mut run.device, run.now).unwrap();
+    run.send(Event::Power);
+    assert!(run.device.shows_the_asleep_notice());
+    assert!(!run.device.shows_the_cover());
 }
