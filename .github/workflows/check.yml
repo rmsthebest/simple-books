@@ -15,6 +15,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The runner has about 14 GB free, and full debug info for every test
+  # binary and target check.sh builds is more than that. Line tables keep
+  # backtraces' files and lines; incremental builds only help locally.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_INCREMENTAL: "0"
   KEPUBIFY_VERSION: "5.0.0"
   KEPUBIFY_SHA256: cb77fe364f780feea8de4586600f7160c7516586c21d9a80b1504c6630389069
 
@@ -26,6 +31,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # Toolchains the runner comes with that nothing here uses, for room.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
 
       - name: Rust toolchain
         run: |
@@ -40,8 +51,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: check-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: check-${{ runner.os }}-
+          # v2: built with line tables only, so the full-debug caches before
+          # it aren't restored.
+          key: check-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: check-v2-${{ runner.os }}-
 
       - name: Tools
         run: |
