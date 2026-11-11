@@ -17,6 +17,10 @@ cargo clippy --lib --target wasm32-unknown-unknown --features hydrate -- -D warn
 step "tests"
 cargo test --workspace --features ssr
 
+step "dictionary converter"
+cargo clippy -p dictionary --features convert --all-targets -- -D warnings
+cargo test -p dictionary --features convert
+
 step "reader engine links for the Kobo"
 cargo build -p reader-core --examples --target armv7-unknown-linux-musleabihf
 

@@ -2,7 +2,8 @@
 # Builds everything Simple Books puts on a Kobo, laid out as on its drive:
 #
 #   target/kobo-files/.adds/simple-books/   the reader, its SSH server and
-#                                           scripts, and `version`
+#                                           scripts, the English–Swedish
+#                                           dictionary, and `version`
 #   target/kobo-files/.kobo/Kobo.tgz        the Nickel plugin, which the
 #                                           Kobo unpacks into /usr/local/Kobo
 #                                           when it next starts
@@ -29,6 +30,9 @@ for binary in reader-kobo simple-books-ssh; do
         cp "target/${target}/release/${binary}" "${app}/${binary}"
     fi
 done
+# Made from Folkets lexikon (CC BY-SA 2.5); see crates/dictionary/data.
+cargo run --quiet --release -p dictionary --features convert --bin build-dictionary -- \
+    crates/dictionary/data/folkets_en_sv_public.xml.gz "${app}/dict-en-sv" >&2
 for script in reader.sh wifi.sh boot.sh boot-install.sh power.sh; do
     cp "kobo/${script}" "${app}/${script}"
 done

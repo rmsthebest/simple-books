@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/book-convert", "crates/book-format", "crates/epub", "crates/kobo-conf", "crates/kobo-files", "crates/kobo-plugin", "crates/kobo-ssh", "crates/reader-app", "crates/reader-core", "crates/reader-emu", "crates/reader-kobo", "crates/reader-sync", "crates/sync-proto"]
+members = [".", "crates/book-convert", "crates/book-format", "crates/dictionary", "crates/epub", "crates/kobo-conf", "crates/kobo-files", "crates/kobo-plugin", "crates/kobo-ssh", "crates/reader-app", "crates/reader-core", "crates/reader-emu", "crates/reader-kobo", "crates/reader-sync", "crates/sync-proto"]
 resolver = "3"
 
 [workspace.package]
