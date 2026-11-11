@@ -265,6 +265,14 @@ impl<R: Read + Seek> Reader<R> {
         }
     }
 
+    /// The page shown and how many pages the book has, counting from 1, once
+    /// every chapter is paginated; until then the numbers could still move.
+    pub fn page_number(&self) -> Option<(usize, usize)> {
+        let map = self.page_map();
+        let total = map.total()?;
+        Some((map.number(self.current()?)? + 1, total))
+    }
+
     pub fn current(&self) -> Option<PageRef> {
         self.current
     }

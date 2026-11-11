@@ -1422,24 +1422,26 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         refresh: Refresh,
         now: Instant,
     ) -> Result<(), AppError> {
+        if self.book.is_none() {
+            return Ok(());
+        }
+        self.compose_page()?;
+        device.show(&self.screen, refresh);
+        self.guard.refreshing(now + refresh.duration());
         let Some(book) = self.book.as_mut() else {
             return Ok(());
         };
-        if let Some(page) = book.reader.page()? {
-            device.show(page, refresh);
-        } else {
-            self.screen.clear();
-            device.show(&self.screen, refresh);
-        }
-        self.guard.refreshing(now + refresh.duration());
         book.reader.prepare()?;
         book.paginate_in_background();
         Ok(())
     }
 
     fn tick(&mut self, now: Instant, device: &mut dyn Device) -> Result<(), AppError> {
-        if let Some(book) = self.book.as_mut() {
-            book.collect(device);
+        let paginated = self.book.as_mut().is_some_and(|book| book.collect(device));
+        if paginated && matches!(self.mode, Mode::Reading) {
+            // Now with its number.
+            self.compose_page()?;
+            device.show(&self.screen, Refresh::Partial);
         }
         self.sync_news(device, now);
         self.refresh_status(device, now);
@@ -1711,14 +1713,22 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     }
 
     /// Copies the current page into `screen`, to draw over.
+    /// Copies the open book's page into `screen`, with its number under it.
     fn compose_page(&mut self) -> Result<(), AppError> {
+        let mut number = None;
         let page = match self.book.as_mut() {
-            Some(book) => book.reader.page()?,
+            Some(book) => {
+                number = book.reader.page_number();
+                book.reader.page()?
+            }
             None => None,
         };
         match page {
             Some(page) => self.screen.clone_from(page),
             None => self.screen.clear(),
+        }
+        if let Some((page, pages)) = number {
+            page_number(&mut self.screen, &mut self.ui, page, pages);
         }
         Ok(())
     }
@@ -1851,6 +1861,19 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
 }
 
 /// "84%", "84%, charging", or nothing if the device doesn't say.
+/// The page number's text size: small, in the bottom margin.
+const PAGE_NUMBER_SIZE: f32 = 28.0;
+
+/// "12 of 340", centred in the bottom margin, which no line of the book
+/// reaches.
+fn page_number(screen: &mut Canvas, ui: &mut Typesetter, page: usize, pages: usize) {
+    let text = format!("{page} of {pages}");
+    let width = ui.label_width(&text, PAGE_NUMBER_SIZE, 400.0);
+    let x = (screen.width() as f32 - width) / 2.0;
+    let baseline = screen.height() as f32 - 26.0;
+    ui.draw_label(screen, &text, (x, baseline), PAGE_NUMBER_SIZE, 400.0);
+}
+
 /// Such as "Wed 11 Nov 11:09", `offset` seconds ahead of UTC.
 fn local_time(clock: u64, offset: i32) -> Option<String> {
     use jiff::{

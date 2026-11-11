@@ -584,6 +584,9 @@ fn the_page_map_is_saved_once_the_book_is_paginated() {
     }
     assert!(run.device.files.keys().any(|k| k.starts_with("pages-")));
     assert!(run.reader().page_map().is_complete());
+    // The page went up again with its number under it.
+    assert_eq!(run.reader().page_number().map(|(page, _)| page), Some(1));
+    assert_eq!(run.device.shown.last(), Some(&Refresh::Partial));
     // The next start uses it and paginates nothing more.
     let again = Run::with(Fake {
         files: run.device.files.clone(),

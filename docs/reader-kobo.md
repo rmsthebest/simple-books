@@ -112,7 +112,8 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   whose title, authors or series hold every word typed show as you type, ignoring case
   and accents, so "hjarna" finds "Hjärna". Titles starting with what's typed come first.
 - **Turn pages** by tapping: the left third of the page goes back, the right third goes
-  forward. Tap a link to follow it.
+  forward. Tap a link to follow it. The page number, such as "12 of 340", is under the
+  text once the whole book has been counted, a few seconds after it's first opened.
 - **The menu** opens with a tap in the middle third of the page. It has the front light and
   warmth, text size, darkness and contrast, and along the bottom **Close**, **Return**
   after following a link, **Home** and **Settings**. **Done** in Settings comes back to

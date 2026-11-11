@@ -292,6 +292,46 @@ fn nothing_is_drawn_in_the_side_margins() {
 }
 
 #[test]
+fn the_bottom_margin_stays_clear_for_the_page_number() {
+    let bytes = book();
+    let settings = Settings::default();
+    let mut reader = Reader::open(open(&bytes), settings.clone(), 1, START, None).unwrap();
+    loop {
+        let canvas = reader.page().unwrap().unwrap();
+        let width = canvas.width() as usize;
+        let from = (settings.height - settings.margin_bottom) as usize * width;
+        assert!(
+            canvas.pixels()[from..].iter().all(|p| *p == 255),
+            "ink in the bottom margin on {:?}",
+            reader.current()
+        );
+        if !reader.turn(Turn::Next).unwrap() {
+            break;
+        }
+    }
+}
+
+#[test]
+fn page_numbers_count_the_whole_book_once_it_is_paginated() {
+    let bytes = book();
+    let settings = Settings::default();
+    let reader = Reader::open(open(&bytes), settings.clone(), 1, START, None).unwrap();
+    assert_eq!(reader.page_number(), None, "not paginated yet");
+    let mut map = PageMap::new(PageMap::key(1, &settings), 3);
+    paginate_book(&mut open(&bytes), settings.clone(), &mut map, None, || {
+        false
+    })
+    .unwrap();
+    let total = map.total().unwrap();
+    let mut reader = Reader::open(open(&bytes), settings, 1, START, Some(map)).unwrap();
+    assert_eq!(reader.page_number(), Some((1, total)));
+    reader.turn(Turn::Next).unwrap();
+    assert_eq!(reader.page_number(), Some((2, total)));
+    while reader.turn(Turn::Next).unwrap() {}
+    assert_eq!(reader.page_number(), Some((total, total)));
+}
+
+#[test]
 fn a_background_map_matches_paginating_on_demand() {
     let bytes = book();
     let settings = Settings::default();

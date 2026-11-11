@@ -195,7 +195,9 @@ impl<R: Read + Seek + Send + 'static> OpenBook<R> {
 
     /// Takes the whole book's page map once the thread has finished, and
     /// saves it for next time.
-    pub(crate) fn collect(&mut self, device: &mut dyn Device) {
+    /// Takes the page map from the background, if it's done. True if it
+    /// was, so the page number can be shown.
+    pub(crate) fn collect(&mut self, device: &mut dyn Device) -> bool {
         if let Some(background) = &self.background
             && let Ok(map) = background.receive.try_recv()
         {
@@ -203,7 +205,9 @@ impl<R: Read + Seek + Send + 'static> OpenBook<R> {
             let key = PageMap::key(self.key, self.reader.settings());
             save_json(device, &pages_file(key), &map);
             self.background = None;
+            return true;
         }
+        false
     }
 }
 
