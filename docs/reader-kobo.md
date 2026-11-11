@@ -97,6 +97,8 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
 - **The home screen** shows the book being read, with its cover and how far through it
   is, then the books read lately and the books added lately. Tap any of them to open it
   where it was left. **Library** and **Settings** are at the bottom.
+- **The way out** of each screen (**Close**, **Done**, **Back**, **Home** from the library)
+  is at the right end of its bottom row, under the thumb of a right hand holding the Kobo.
 - **The bar along the top** of every screen but the page, the menu's included, shows the
   day and time (in the time zone set in Nickel), **Wi-Fi** while it's on, and the
   battery, with ↑ while charging. The time moves on each minute.
@@ -124,8 +126,8 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   Royal Institute of Technology, under [CC BY-SA
   2.5](https://creativecommons.org/licenses/by-sa/2.5/); the panel credits it too.
 - **The menu** opens with a tap in the middle third of the page. It has the front light and
-  warmth, text size, darkness and contrast, and along the bottom **Close**, **Return**
-  after following a link, **Home** and **Settings**. **Done** in Settings comes back to
+  warmth, text size, darkness and contrast, and along the bottom **Return** after
+  following a link, **Home**, **Settings** and **Close**. **Done** in Settings comes back to
   the book. Tap below the menu to close it.
 - **Sync**, from Settings, pairs the reader with your library: tap **Pair**, then on the
   website's Kobo page, sign in and type the code shown. The library downloads in the

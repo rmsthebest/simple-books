@@ -84,9 +84,10 @@ impl Layout {
             top += KEY_HEIGHT + KEY_GAP;
         }
         let bottom = key_row(top, content, &[2.0, 5.0, 2.0]);
-        keys.push((bottom[0], Action::Back, "Library".to_owned()));
+        // Back to the library, the way out, on the right (see ui).
+        keys.push((bottom[0], Action::Clear, "Clear".to_owned()));
         keys.push((bottom[1], Action::Type(' '), "space".to_owned()));
-        keys.push((bottom[2], Action::Clear, "Clear".to_owned()));
+        keys.push((bottom[2], Action::Back, "Library".to_owned()));
 
         // As many results as fit above the keyboard, keeping a line for how
         // many more there are.

@@ -100,14 +100,14 @@ impl Layout {
             }
             top += row;
         }
-        // Each button's share of the row; the way out on the left (see ui).
+        // Each button's share of the row; the way out on the right (see ui).
         let mut bottom_row: Vec<(Action, &'static str, f32)> = Vec::new();
-        bottom_row.push((Action::Close, "Close", 1.0));
         if can_return {
             bottom_row.push((Action::Return, "Return", 1.0));
         }
         bottom_row.push((Action::Home, "Home", 1.0));
         bottom_row.push((Action::Settings, "Settings", 1.3));
+        bottom_row.push((Action::Close, "Close", 1.0));
         let shares: Vec<f32> = bottom_row.iter().map(|(_, _, share)| *share).collect();
         let rects = ui::row(
             margin,

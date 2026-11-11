@@ -140,10 +140,10 @@ fn tap(session: &mut Session<fs::File>, device: &mut Disk, (x, y): (f32, f32)) {
 }
 
 const HOME_SETTINGS: (f32, f32) = (776.0, 1376.0);
-const SETTINGS_SYNC: (f32, f32) = (536.0, 1376.0);
-/// Pair, or Sync now once paired: the last button along the bottom, with
-/// Back first.
-const SYNC_GO: (f32, f32) = (900.0, 1376.0);
+const SETTINGS_SYNC: (f32, f32) = (216.0, 1376.0);
+/// Pair, or Sync now once paired: Pair is first along the bottom, and Sync
+/// now second after Unpair; Back is last.
+const SYNC_GO: (f32, f32) = (450.0, 1376.0);
 
 /// Opens `file` and turns four pages. Returns where it got to.
 fn read_a_little(session: &mut Session<fs::File>, device: &mut Disk, file: &str) -> Position {
@@ -160,10 +160,10 @@ fn read_a_little(session: &mut Session<fs::File>, device: &mut Disk, file: &str)
 }
 
 /// From an open book: the menu (the middle of the page), its Settings
-/// (last on its bottom row), Sync, then Sync now.
+/// (before Close on its bottom row), Sync, then Sync now.
 async fn sync_from_the_book(session: &mut Session<fs::File>, device: &mut Disk) {
     tap(session, device, (536.0, 900.0));
-    tap(session, device, (900.0, 780.0));
+    tap(session, device, (610.0, 780.0));
     assert!(session.in_settings(), "settings, to reach Sync now");
     tap(session, device, SETTINGS_SYNC);
     tap(session, device, SYNC_GO);

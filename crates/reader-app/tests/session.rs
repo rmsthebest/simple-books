@@ -333,6 +333,12 @@ fn the_menu_changes_the_light_and_closes_with_a_full_refresh() {
     run.tap(FORWARD.0, 1300.0);
     assert_eq!(run.device.shown.last(), Some(&Refresh::Full));
     assert_eq!(run.page(), page);
+    // So does Close, at the right end of the bottom row.
+    run.tap(MENU.0, MENU.1);
+    assert!(run.session.in_menu());
+    run.tap(MENU_CLOSE.0, MENU_CLOSE.1);
+    assert!(!run.session.in_menu());
+    assert_eq!(run.page(), page);
     // The light is remembered for next time.
     let again = Run::with(Fake {
         files: run.device.files.clone(),
@@ -566,9 +572,8 @@ fn a_link_goes_there_and_the_menu_returns() {
     run.tap(link.0, link.1);
     assert_eq!(run.page().map(|p| p.chapter), Some(1));
     run.tap(MENU.0, MENU.1);
-    // With somewhere to return to, Return is second on the bottom row,
-    // after Close.
-    run.tap(390.0, 6.0 * 120.0 + 60.0);
+    // With somewhere to return to, Return is first on the bottom row.
+    run.tap(160.0, 6.0 * 120.0 + 60.0);
     assert_eq!(run.page(), page);
 }
 
@@ -632,12 +637,12 @@ const LINE_SPACING: u8 = 1;
 const LIGHT: u8 = 5;
 const TURN_GUARD: u8 = 7;
 const JUSTIFIED: (f32, f32) = (296.0, 1253.0);
-/// Done, Sync and Kobo along the bottom.
-const SETTINGS_DONE: (f32, f32) = (216.0, 1376.0);
-const SETTINGS_SYNC: (f32, f32) = (536.0, 1376.0);
-const SETTINGS_KOBO: (f32, f32) = (856.0, 1376.0);
-/// The sync page's Back, on the left of its bottom row.
-const SYNC_BACK: (f32, f32) = (150.0, 1376.0);
+/// Sync, Kobo and Done along the bottom.
+const SETTINGS_SYNC: (f32, f32) = (216.0, 1376.0);
+const SETTINGS_KOBO: (f32, f32) = (536.0, 1376.0);
+const SETTINGS_DONE: (f32, f32) = (856.0, 1376.0);
+/// The sync page's Back, on the right of its bottom row.
+const SYNC_BACK: (f32, f32) = (1000.0, 1376.0);
 /// On the library screen: the first two books, sorting by author, and Home.
 const LIBRARY_FIRST: (f32, f32) = (536.0, 306.0);
 const LIBRARY_SECOND: (f32, f32) = (536.0, 438.0);
@@ -646,9 +651,9 @@ const LIBRARY_SEARCH: (f32, f32) = (896.0, 172.0);
 /// On the search screen: the first result, and the keys along the bottom.
 const SEARCH_FIRST: (f32, f32) = (536.0, 306.0);
 const KEY_DELETE: (f32, f32) = (844.0, 1268.0);
-const KEY_LIBRARY: (f32, f32) = (166.0, 1376.0);
+const KEY_LIBRARY: (f32, f32) = (906.0, 1376.0);
 const KEY_SPACE: (f32, f32) = (536.0, 1376.0);
-const KEY_CLEAR: (f32, f32) = (906.0, 1376.0);
+const KEY_CLEAR: (f32, f32) = (166.0, 1376.0);
 
 /// The middle of a letter's key: eleven to a row in the top two rows, and
 /// seven in the third, centred with Delete after them.
@@ -669,11 +674,12 @@ fn key(letter: char) -> (f32, f32) {
     };
     (x, y)
 }
-const LIBRARY_HOME: (f32, f32) = (198.0, 1376.0);
-/// The menu's bottom row: Close, Return (after a link), Home and Settings.
-/// Home's spot is inside it with or without Return.
-const MENU_HOME: (f32, f32) = (560.0, 6.0 * 120.0 + 60.0);
-const MENU_SETTINGS: (f32, f32) = (900.0, 6.0 * 120.0 + 60.0);
+const LIBRARY_HOME: (f32, f32) = (874.0, 1376.0);
+/// The menu's bottom row: Return (after a link), Home, Settings and Close.
+/// Home's and Settings' spots are inside them with or without Return.
+const MENU_HOME: (f32, f32) = (315.0, 6.0 * 120.0 + 60.0);
+const MENU_SETTINGS: (f32, f32) = (610.0, 6.0 * 120.0 + 60.0);
+const MENU_CLOSE: (f32, f32) = (1000.0, 6.0 * 120.0 + 60.0);
 
 #[test]
 fn it_starts_at_home_with_the_books_listed() {

@@ -60,8 +60,8 @@ impl Layout {
     ) -> Self {
         let (width, height) = (width as f32, height as f32);
         let content = width - 2.0 * MARGIN;
-        // Back on the left, going ahead on the right (see ui).
-        let mut row: Vec<(Action, &'static str, f32)> = vec![(Action::Back, "Back", 1.0)];
+        // Back, the way out, on the right (see ui).
+        let mut row: Vec<(Action, &'static str, f32)> = Vec::new();
         match &view {
             View::NoServer => {}
             View::Unpaired { .. } => row.push((Action::Pair, "Pair", 1.0)),
@@ -79,6 +79,7 @@ impl Layout {
             }
             View::Busy(_) => row.push((Action::Stop, "Stop", 1.0)),
         }
+        row.push((Action::Back, "Back", 1.0));
         let shares: Vec<f32> = row.iter().map(|(_, _, share)| *share).collect();
         let top = height - BUTTON_HEIGHT - 24.0;
         let rects = ui::row(MARGIN, top, content, BUTTON_HEIGHT, &shares);

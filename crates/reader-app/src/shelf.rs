@@ -101,23 +101,24 @@ impl Layout {
             bottom_top,
             content,
             BUTTON_HEIGHT,
-            &[1.5, 1.0, 1.5, 1.0],
+            &[1.0, 1.5, 1.0, 1.5],
         );
-        buttons.push((bottom[0], Action::Home, "Home"));
-        // A page button only where there's a page to go to.
+        // A page button only where there's a page to go to, and Home, the
+        // way out, on the right (see ui).
         if page > 0 {
-            buttons.push((bottom[1], Action::Page(Turn::Previous), "‹"));
+            buttons.push((bottom[0], Action::Page(Turn::Previous), "‹"));
         }
         if page + 1 < pages {
-            buttons.push((bottom[3], Action::Page(Turn::Next), "›"));
+            buttons.push((bottom[2], Action::Page(Turn::Next), "›"));
         }
+        buttons.push((bottom[3], Action::Home, "Home"));
         Self {
             sort,
             page,
             pages,
             rows,
             buttons,
-            page_label: bottom[2],
+            page_label: bottom[1],
         }
     }
 

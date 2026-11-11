@@ -220,10 +220,10 @@ impl Layout {
             BUTTON_HEIGHT,
             &[1.0, 1.0, 1.0],
         );
-        // Done, the way out, on the left (see ui).
-        buttons.push((bottom[0], Action::Done, "Done"));
-        buttons.push((bottom[1], Action::Sync, "Sync"));
-        buttons.push((bottom[2], Action::Kobo, "Kobo"));
+        // Done, the way out, on the right (see ui).
+        buttons.push((bottom[0], Action::Sync, "Sync"));
+        buttons.push((bottom[1], Action::Kobo, "Kobo"));
+        buttons.push((bottom[2], Action::Done, "Done"));
         Self { buttons }
     }
 
