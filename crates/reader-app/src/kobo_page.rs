@@ -114,25 +114,28 @@ impl Layout {
         canvas.clear();
         ui::header(canvas, ui, "Kobo", status);
         let room = canvas.width() as f32 - 2.0 * MARGIN;
-        let paragraph = |canvas: &mut Canvas, ui: &mut Typesetter, text: &str, mut y: f32| {
-            for line in ui::wrap(ui, text, LABEL_SIZE, 400.0, room, 4) {
-                ui.draw_label(canvas, &line, (MARGIN, y), LABEL_SIZE, 400.0);
-                y += LINE;
-            }
-            y
-        };
+        let paragraph =
+            |canvas: &mut Canvas, ui: &mut Typesetter, text: &str, mut y: f32, most: usize| {
+                for line in ui::wrap(ui, text, LABEL_SIZE, 400.0, room, most) {
+                    ui.draw_label(canvas, &line, (MARGIN, y), LABEL_SIZE, 400.0);
+                    y += LINE;
+                }
+            };
         if self.state.starts_here.is_some() {
-            paragraph(canvas, ui, START_SAID, TEXT_TOP);
+            paragraph(canvas, ui, START_SAID, TEXT_TOP, 4);
         }
-        if let Some(said) = &self.state.said {
-            paragraph(canvas, ui, said, START_TOP + BUTTON_HEIGHT + GAP + LINE);
+        // Between the start toggle and Uninstall there's room for two lines:
+        // what the toggle said, once tapped, or else the room and battery.
+        let between = START_TOP + BUTTON_HEIGHT + GAP + LINE;
+        if let Some(said) = self.state.said.as_ref().or(self.state.about.as_ref()) {
+            paragraph(canvas, ui, said, between, 2);
         }
-        // Where the next line would go: what's below must start lower.
-        let uninstall_end = paragraph(
+        paragraph(
             canvas,
             ui,
             UNINSTALL_SAID,
             UNINSTALL_TOP + BUTTON_HEIGHT + GAP + LINE,
+            4,
         );
         let bottom = canvas.height() as f32 - BUTTON_HEIGHT - 24.0;
         let version = self
@@ -140,15 +143,6 @@ impl Layout {
             .map(|said| ui::wrap(ui, &said, LABEL_SIZE, 400.0, room, 3))
             .unwrap_or_default();
         let version_top = bottom - GAP - LINE * (version.len() as f32 - 1.0) - 12.0;
-        // One line, just above the version, if there's room.
-        if let Some(about) = &self.state.about {
-            let y = version_top - LINE - GAP;
-            if let [line] = ui::wrap(ui, about, LABEL_SIZE, 400.0, room, 2).as_slice()
-                && y >= uninstall_end
-            {
-                ui.draw_label(canvas, line, (MARGIN, y), LABEL_SIZE, 400.0);
-            }
-        }
         let mut y = version_top;
         for line in version {
             ui.draw_label(canvas, &line, (MARGIN, y), LABEL_SIZE, 400.0);

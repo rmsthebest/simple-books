@@ -26,8 +26,7 @@
 //! - **Sleep:** the power button, or [`AUTO_SLEEP`] without a touch, saves
 //!   the place, puts the cover of the book being read on the screen (or a
 //!   notice, without one) and suspends, except while charging, which can hang the
-//!   Clara BW's kernel. Asleep for [`AUTO_OFF`], it switches off, leaving
-//!   the cover up, as Nickel does.
+//!   Clara BW's kernel.
 //! - **Saved:** the place in each book, the preferences, and each book's
 //!   page map once it's complete, through [`Device::save`].
 //! - **Sync:** with [`Session::enable_sync`], books come from the server and
@@ -109,9 +108,6 @@ pub const SLEEP_SEND_LONGEST: Duration = Duration::from_secs(60);
 /// On waking, it syncs if it hasn't for this long, by the clock: an
 /// [`Instant`] doesn't move on while the device is suspended.
 pub const SYNC_EVERY: Duration = Duration::from_mins(30);
-/// Asleep this long, it switches off, where the device can wake itself to
-/// do so ([`Device::wake_at`]).
-pub const AUTO_OFF: Duration = Duration::from_hours(24 * 7);
 /// While a sync runs, the session looks for news this often.
 const SYNC_CHECK: Duration = Duration::from_millis(500);
 /// At or below this, and not charging, it switches itself off. About half
@@ -216,12 +212,6 @@ pub trait Device {
     /// Shows everything after this inverted, or not, for dark mode.
     fn set_dark(&mut self, on: bool) {
         let _ = on;
-    }
-    /// Asks to be woken from [`Device::suspend`] at `at`, in seconds since
-    /// 1970, or not at all with `None`. False where it can't.
-    fn wake_at(&mut self, at: Option<u64>) -> bool {
-        let _ = at;
-        false
     }
     fn load(&mut self, name: &str) -> Option<Vec<u8>>;
     /// The English–Swedish dictionary file, if there is one: [`DICTIONARY`]
@@ -1778,26 +1768,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                             syncer.stop();
                         }
                         *suspend_at = now + SLEEP_RETRY;
-                    } else if device.battery().is_some_and(|b| b.charging) {
-                        *suspend_at = now + SLEEP_RETRY;
+                    } else if !device.battery().is_some_and(|b| b.charging) && device.suspend() {
+                        self.wake(device, Instant::now().max(now))?;
                     } else {
-                        let off_at = device.clock() + AUTO_OFF.as_secs();
-                        let alarm = device.wake_at(Some(off_at));
-                        if device.suspend() {
-                            if alarm && device.clock() >= off_at {
-                                // Woken to switch off; the cover stays up.
-                                return Ok(Flow::PowerOff);
-                            }
-                            if alarm {
-                                device.wake_at(None);
-                            }
-                            self.wake(device, Instant::now().max(now))?;
-                        } else {
-                            if alarm {
-                                device.wake_at(None);
-                            }
-                            *suspend_at = now + SLEEP_RETRY;
-                        }
+                        *suspend_at = now + SLEEP_RETRY;
                     }
                 }
             }

@@ -218,7 +218,8 @@ coordinates.
   skips them. A flat battery resets it to 2000. Nickel sets the time with
   `settimeofday` and `hwclock`. busybox `ntpd` is `/usr/sbin/ntpd`, and `hwclock` is
   util-linux's. `/sys/class/rtc/rtc0/wakealarm` is there for wake alarms: Nickel's
-  automatic power off uses one.
+  automatic power off uses one. Writing a time to it (after `0` to clear one already
+  set) wakes the Kobo from `mem` then; tried on 2026-11-11.
 - **The light by the power button:** `/sys/class/leds/LED`, the only one fitted.
   `bd71828-amber-led` and `bd71828-green-led` are the PMIC's, and nothing shows when they're
   set; amber reads 1 for no visible reason. Every LED offers the kernel triggers

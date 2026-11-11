@@ -173,8 +173,8 @@ cargo run --release --features ssr -- convert-book --input book.epub --output bo
   suspends 15 seconds later,
   once the screen has finished with the panel. Press the power button again to wake. It doesn't sleep while plugged in, since
   that can hang the Clara BW's kernel; it stays on the sleep screen and sleeps once
-  unplugged. Asleep for a week, it switches itself off, as Nickel does, leaving the
-  cover up: the Kobo's clock wakes it to do so. Hold the power button to switch it on.
+  unplugged. It doesn't switch itself off after a long sleep, as Nickel can: starting
+  again takes far longer than waking.
 - **The battery:** at 3%, unless it's charging, the reader saves your place, says
   "Battery empty" and switches the Kobo off, as Nickel does, rather than run until the
   storage could be left half written. Charge it, then hold the power button. At 10% or
