@@ -34,6 +34,8 @@ const BRIGHTNESS: &str = "/sys/class/backlight/mxc_msp430.0/brightness";
 /// KOReader shows it.
 const COLOR: &str = "/sys/class/backlight/lm3630a_led/color";
 const STATE_EXTENDED: &str = "/sys/power/state-extended";
+/// The RTC's alarm, in seconds since 1970; it wakes the Kobo from suspend.
+const WAKE_ALARM: &str = "/sys/class/rtc/rtc0/wakealarm";
 const STATE: &str = "/sys/power/state";
 
 pub(crate) struct Kobo {
@@ -150,6 +152,24 @@ impl Device for Kobo {
         }
         log!("woke");
         slept.is_ok()
+    }
+
+    fn wake_at(&mut self, at: Option<u64>) -> bool {
+        // An alarm that's set can't be changed, only cleared.
+        if let Err(error) = fs::write(WAKE_ALARM, "0") {
+            log!("{WAKE_ALARM}: {error}");
+            return false;
+        }
+        let Some(at) = at else {
+            return true;
+        };
+        match fs::write(WAKE_ALARM, at.to_string()) {
+            Ok(()) => true,
+            Err(error) => {
+                log!("{WAKE_ALARM}: {error}");
+                false
+            }
+        }
     }
 
     fn load(&mut self, name: &str) -> Option<Vec<u8>> {

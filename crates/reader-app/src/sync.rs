@@ -254,9 +254,10 @@ pub(crate) struct Syncer {
     running: Option<Running>,
     pub activity: Option<Activity>,
     pub status: Status,
-    /// When the last pairing or sync started, to sync again only now and
-    /// then.
-    pub started: Option<Instant>,
+    /// When the last pairing or sync started, in seconds since 1970, to
+    /// sync again on waking only now and then. By the clock, since an
+    /// `Instant` stands still while the device is suspended.
+    pub started: Option<u64>,
     /// How to log in while SSH is on.
     ssh_on: Option<SshLogin>,
     /// Why SSH last didn't start.
@@ -409,7 +410,7 @@ impl Syncer {
     }
 
     /// Starts pairing, then a first sync once the code's been entered.
-    pub(crate) fn pair(&mut self, now: Instant) {
+    pub(crate) fn pair(&mut self, clock: u64) {
         let Some(server) = self.setup.server.clone() else {
             return;
         };
@@ -419,7 +420,7 @@ impl Syncer {
         let name = self.setup.name.clone();
         let paths = self.paths.clone();
         self.activity = Some(Activity::Connecting);
-        self.started = Some(now);
+        self.started = Some(clock);
         self.spawn(move |send, stop, network| {
             online(network, send, || {
                 let client = Client::new(&server);
@@ -430,7 +431,7 @@ impl Syncer {
 
     /// Starts a sync, sending `local`: where the reader is in each synced
     /// book.
-    pub(crate) fn sync(&mut self, local: BTreeMap<String, Spot>, now: Instant) {
+    pub(crate) fn sync(&mut self, local: BTreeMap<String, Spot>, clock: u64) {
         let Some(server) = self.setup.server.clone() else {
             return;
         };
@@ -440,7 +441,7 @@ impl Syncer {
         let paths = self.paths.clone();
         let updates = self.setup.updates.then(|| self.setup.dir.clone());
         self.activity = Some(Activity::Connecting);
-        self.started = Some(now);
+        self.started = Some(clock);
         self.spawn(move |send, stop, network| {
             online(network, send, || {
                 let client = Client::new(&server);

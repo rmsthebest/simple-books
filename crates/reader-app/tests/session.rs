@@ -15,9 +15,9 @@ use book_format::{
     Align, Block, BlockKind, BookReader, Chapter, FormatError, Limits, Position, Span,
 };
 use reader_app::{
-    AUTO_SLEEP, BATTERY_CHECK, BATTERY_EMPTY, BATTERY_LOW, Battery, BookFile, Books, Device, Event,
-    FULL_EVERY, Flow, Light, Network, Refresh, SLEEP_RETRY, SUSPEND_DELAY, Session, Sort, Ssh,
-    SshLogin, SyncSetup, Turn,
+    AUTO_OFF, AUTO_SLEEP, BATTERY_CHECK, BATTERY_EMPTY, BATTERY_LOW, Battery, BookFile, Books,
+    Device, Event, FULL_EVERY, Flow, Light, Network, Refresh, SLEEP_RETRY, SUSPEND_DELAY, Session,
+    Sort, Ssh, SshLogin, SyncSetup, Turn,
 };
 use reader_core::Reader;
 
@@ -129,6 +129,11 @@ struct Fake {
     battery: Option<Battery>,
     can_suspend: bool,
     suspended: u32,
+    /// Whether it can set a wake alarm, the one set, and how long each
+    /// suspend lasts, by the clock, unless the alarm wakes it sooner.
+    alarms: bool,
+    alarm: Option<u64>,
+    sleep_for: u64,
     files: HashMap<String, Vec<u8>>,
     clock: u64,
     /// Whether switching on starts the reader, if that can change.
@@ -162,8 +167,19 @@ impl Device for Fake {
     fn suspend(&mut self) -> bool {
         if self.can_suspend {
             self.suspended += 1;
+            let woken = self.clock + self.sleep_for;
+            self.clock = match self.alarm {
+                Some(at) if at < woken => at,
+                _ => woken,
+            };
         }
         self.can_suspend
+    }
+    fn wake_at(&mut self, at: Option<u64>) -> bool {
+        if self.alarms {
+            self.alarm = at;
+        }
+        self.alarms
     }
     fn load(&mut self, name: &str) -> Option<Vec<u8>> {
         self.files.get(name).cloned()
@@ -539,6 +555,37 @@ fn waking_on_an_empty_battery_switches_off_at_once() {
     // is due straight away.
     assert!(run.session.deadline(run.now) <= run.now);
     assert_eq!(run.tick_after(Duration::ZERO), Flow::PowerOff);
+}
+
+#[test]
+fn asleep_for_a_week_it_switches_off_on_the_sleep_screen() {
+    let mut run = Run::with(Fake {
+        can_suspend: true,
+        alarms: true,
+        sleep_for: AUTO_OFF.as_secs() * 2,
+        ..Fake::default()
+    });
+    run.send(Event::Power);
+    let sleep_screen = run.device.last;
+    assert_eq!(run.tick_after(SUSPEND_DELAY), Flow::PowerOff);
+    assert_eq!(run.device.suspended, 1);
+    assert_eq!(run.device.last, sleep_screen, "the cover stays up");
+}
+
+#[test]
+fn woken_sooner_it_wakes_as_usual_without_the_alarm() {
+    let mut run = Run::with(Fake {
+        can_suspend: true,
+        alarms: true,
+        sleep_for: 3600,
+        ..Fake::default()
+    });
+    let page = run.device.last;
+    run.send(Event::Power);
+    assert_eq!(run.tick_after(SUSPEND_DELAY), Flow::Continue);
+    assert_eq!(run.device.suspended, 1);
+    assert_eq!(run.device.alarm, None);
+    assert_eq!(run.device.last, page);
 }
 
 #[test]
@@ -1220,7 +1267,7 @@ fn sync_screen(online: &Arc<Online>, dir: &std::path::Path) -> Run {
         ssh: Some(Arc::new(Shared(Arc::clone(online)))),
         updates: false,
     };
-    run.session.enable_sync(setup, &mut run.device, run.now);
+    run.session.enable_sync(setup, &mut run.device);
     run.tap(HOME_SETTINGS.0, HOME_SETTINGS.1);
     run.tap(SETTINGS_SYNC.0, SETTINGS_SYNC.1);
     assert!(run.session.in_sync());
@@ -1477,7 +1524,7 @@ fn on_the_kobo_screen(dir: &std::path::Path, device: Fake) -> Run {
         ssh: None,
         updates: true,
     };
-    run.session.enable_sync(setup, &mut run.device, run.now);
+    run.session.enable_sync(setup, &mut run.device);
     run.tap(HOME_SETTINGS.0, HOME_SETTINGS.1);
     run.tap(SETTINGS_KOBO.0, SETTINGS_KOBO.1);
     run

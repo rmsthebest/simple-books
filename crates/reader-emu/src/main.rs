@@ -212,7 +212,7 @@ fn main() {
             ssh: None,
             updates: false,
         };
-        session.enable_sync(setup, &mut panel, Instant::now());
+        session.enable_sync(setup, &mut panel);
     }
 
     let (width, height) = (

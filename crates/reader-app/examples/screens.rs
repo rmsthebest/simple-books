@@ -182,7 +182,7 @@ fn sync_screens(run: &mut Run) {
         ssh: Some(Arc::new(StandInSsh)),
         updates: false,
     };
-    run.session.enable_sync(setup, &mut run.device, run.now);
+    run.session.enable_sync(setup, &mut run.device);
     run.tap("sync-unpaired", 296.0, 1376.0);
     run.tap("sync-asking", 200.0, 1376.0);
     while run.session.pairing_code().is_none() {

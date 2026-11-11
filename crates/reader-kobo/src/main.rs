@@ -284,7 +284,7 @@ fn run(dir: &Path, boot: bool, after_usb: bool) -> io::Result<Flow> {
         ssh: Some(Arc::new(online::KoboSsh::new(dir))),
         updates: true,
     };
-    session.enable_sync(setup, &mut kobo, Instant::now());
+    session.enable_sync(setup, &mut kobo);
     if boot {
         booted(dir);
     }

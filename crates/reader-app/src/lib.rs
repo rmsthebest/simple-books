@@ -26,7 +26,8 @@
 //! - **Sleep:** the power button, or [`AUTO_SLEEP`] without a touch, saves
 //!   the place, puts the cover of the book being read on the screen (or a
 //!   notice, without one) and suspends, except while charging, which can hang the
-//!   Clara BW's kernel.
+//!   Clara BW's kernel. Asleep for [`AUTO_OFF`], it switches off, leaving
+//!   the cover up, as Nickel does.
 //! - **Saved:** the place in each book, the preferences, and each book's
 //!   page map once it's complete, through [`Device::save`].
 //! - **Sync:** with [`Session::enable_sync`], books come from the server and
@@ -105,8 +106,12 @@ pub const LONG_PRESS: Duration = Duration::from_millis(500);
 /// The longest the places from before sleeping may take to send before
 /// it suspends anyway; Wi-Fi alone can take most of a minute.
 pub const SLEEP_SEND_LONGEST: Duration = Duration::from_secs(60);
-/// On waking, it syncs if it hasn't for this long.
+/// On waking, it syncs if it hasn't for this long, by the clock: an
+/// [`Instant`] doesn't move on while the device is suspended.
 pub const SYNC_EVERY: Duration = Duration::from_mins(30);
+/// Asleep this long, it switches off, where the device can wake itself to
+/// do so ([`Device::wake_at`]).
+pub const AUTO_OFF: Duration = Duration::from_hours(24 * 7);
 /// While a sync runs, the session looks for news this often.
 const SYNC_CHECK: Duration = Duration::from_millis(500);
 /// At or below this, and not charging, it switches itself off. About half
@@ -203,6 +208,12 @@ pub trait Device {
     /// Sleeps, returning once awake again. False if it couldn't sleep, such
     /// as while charging.
     fn suspend(&mut self) -> bool;
+    /// Asks to be woken from [`Device::suspend`] at `at`, in seconds since
+    /// 1970, or not at all with `None`. False where it can't.
+    fn wake_at(&mut self, at: Option<u64>) -> bool {
+        let _ = at;
+        false
+    }
     fn load(&mut self, name: &str) -> Option<Vec<u8>>;
     /// The English–Swedish dictionary file, if there is one: [`DICTIONARY`]
     /// beside the saved files, unless the platform keeps it elsewhere.
@@ -600,7 +611,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
     }
 
     /// Turns on syncing with a server, and syncs if already paired.
-    pub fn enable_sync(&mut self, setup: SyncSetup, device: &mut dyn Device, now: Instant) {
+    pub fn enable_sync(&mut self, setup: SyncSetup, device: &mut dyn Device) {
         let status = load_json(device, sync::STATUS).unwrap_or_default();
         let syncer = sync::Syncer::new(setup, status);
         if self.library.apply_sync(&syncer.state()) {
@@ -608,17 +619,17 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         }
         self.syncer = Some(syncer);
         if !battery_low(device) {
-            self.start_sync(device, now);
+            self.start_sync(device);
         }
     }
 
     /// Starts a sync, unless one's running or it isn't paired.
-    fn start_sync(&mut self, device: &mut dyn Device, now: Instant) {
+    fn start_sync(&mut self, device: &mut dyn Device) {
         let local = self.local_places(device);
         if let Some(syncer) = self.syncer.as_mut()
             && syncer.paired()
         {
-            syncer.sync(local, now);
+            syncer.sync(local, device.clock());
         }
     }
 
@@ -871,10 +882,10 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
             },
             Some(sync_page::Action::Pair) => {
                 if let Some(syncer) = self.syncer.as_mut() {
-                    syncer.pair(now);
+                    syncer.pair(device.clock());
                 }
             }
-            Some(sync_page::Action::SyncNow) => self.start_sync(device, now),
+            Some(sync_page::Action::SyncNow) => self.start_sync(device),
             Some(sync_page::Action::Stop) => {
                 if let Some(syncer) = &self.syncer {
                     syncer.stop();
@@ -1012,7 +1023,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 return self.power_tap(x, y, now, device);
             }
             Event::Power | Event::Turn(_) | Event::Back if power_until.is_some() => {}
-            Event::Tick => self.tick(now, device)?,
+            Event::Tick => return self.tick(now, device),
             Event::Computer(plugged) => self.computer(plugged, device, now)?,
             Event::Tap { .. } | Event::Power if asleep => self.wake(device, now)?,
             _ if asleep => {}
@@ -1712,7 +1723,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         Ok(())
     }
 
-    fn tick(&mut self, now: Instant, device: &mut dyn Device) -> Result<(), AppError> {
+    fn tick(&mut self, now: Instant, device: &mut dyn Device) -> Result<Flow, AppError> {
         let paginated = self.book.as_mut().is_some_and(|book| book.collect(device));
         if paginated && matches!(self.mode, Mode::Reading) {
             // Now with its number.
@@ -1742,10 +1753,26 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                             syncer.stop();
                         }
                         *suspend_at = now + SLEEP_RETRY;
-                    } else if !device.battery().is_some_and(|b| b.charging) && device.suspend() {
-                        self.wake(device, Instant::now().max(now))?;
-                    } else {
+                    } else if device.battery().is_some_and(|b| b.charging) {
                         *suspend_at = now + SLEEP_RETRY;
+                    } else {
+                        let off_at = device.clock() + AUTO_OFF.as_secs();
+                        let alarm = device.wake_at(Some(off_at));
+                        if device.suspend() {
+                            if alarm && device.clock() >= off_at {
+                                // Woken to switch off; the cover stays up.
+                                return Ok(Flow::PowerOff);
+                            }
+                            if alarm {
+                                device.wake_at(None);
+                            }
+                            self.wake(device, Instant::now().max(now))?;
+                        } else {
+                            if alarm {
+                                device.wake_at(None);
+                            }
+                            *suspend_at = now + SLEEP_RETRY;
+                        }
                     }
                 }
             }
@@ -1768,7 +1795,7 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
                 }
             }
         }
-        Ok(())
+        Ok(Flow::Continue)
     }
 
     /// The screen that's up, to come back to.
@@ -2067,13 +2094,15 @@ impl<R: Read + Seek + Send + 'static> Session<R> {
         self.last_touch = now;
         // Asleep, the clock the checks go by stood still.
         self.battery_checked = None;
+        let clock = device.clock();
         let due = !battery_low(device)
-            && self.syncer.as_ref().is_some_and(|s| {
-                s.started
-                    .is_none_or(|at| now.duration_since(at) >= SYNC_EVERY)
+            && self.syncer.as_ref().is_some_and(|syncer| {
+                syncer
+                    .started
+                    .is_none_or(|at| clock.saturating_sub(at) >= SYNC_EVERY.as_secs())
             });
         if due {
-            self.start_sync(device, now);
+            self.start_sync(device);
         }
         if self.computer && !self.usb_declined {
             // Plugged in while it slept: that first, going back to `back`.
