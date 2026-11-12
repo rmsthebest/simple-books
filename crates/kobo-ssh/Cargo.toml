@@ -17,5 +17,5 @@ path = "src/main.rs"
 
 [dependencies]
 libc = "0.2"
-russh = { version = "0.63", default-features = false, features = ["ring"] }
+russh = { version = "0.65", default-features = false, features = ["ring"] }
 tokio = { version = "1", features = ["rt", "net", "io-util", "io-std", "macros", "time", "sync", "process"] }

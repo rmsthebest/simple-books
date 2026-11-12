@@ -31,7 +31,9 @@ use russh::{
         HashAlg, PrivateKey, PublicKey,
         ssh_key::{LineEnding, private::Ed25519Keypair},
     },
-    server::{self, Auth, ChannelOpenHandle, Msg, Server as _, Session},
+    server::{
+        self, Auth, ChannelOpenHandle, Msg, PublicKeyOffer, Server as _, Session, VerifiedPublicKey,
+    },
 };
 use tokio::net::TcpListener;
 
@@ -247,17 +249,23 @@ impl server::Handler for Client {
     async fn auth_publickey_offered(
         &mut self,
         user: &str,
-        key: &PublicKey,
+        offer: PublicKeyOffer<'_>,
     ) -> Result<Auth, Self::Error> {
-        Ok(if user == USER && authorized(&self.settings.dir, key) {
-            Auth::Accept
-        } else {
-            Auth::reject()
-        })
+        Ok(
+            if user == USER && authorized(&self.settings.dir, offer.public_key) {
+                Auth::Accept
+            } else {
+                Auth::reject()
+            },
+        )
     }
 
-    async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
-        if user == USER && authorized(&self.settings.dir, key) {
+    async fn auth_publickey(
+        &mut self,
+        user: &str,
+        key: VerifiedPublicKey<'_>,
+    ) -> Result<Auth, Self::Error> {
+        if user == USER && authorized(&self.settings.dir, key.public_key) {
             log!("{} logged in with a key", self.from());
             Ok(Auth::Accept)
         } else {
